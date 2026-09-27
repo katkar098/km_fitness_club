@@ -77,6 +77,14 @@ function Members() {
       );
     };
 
+  const resolveStartDate =
+    (member) =>
+      member?.startDate ||
+      member?.membershipStartDate ||
+      member?.start_date ||
+      member?.membership_start_date ||
+      "";
+
   // ==========================================================
   // DATE OBJECT
   // ==========================================================
@@ -205,51 +213,19 @@ function Members() {
     };
 
   // ==========================================================
-  // STATUS TEXT
-  //
-  // Members expiring within 5 days show a countdown
-  // ("Expiring in 3 days") instead of "Active".
-  // ==========================================================
+  const getMembershipStatus =
+    (member) => {
+      const value = String(
+        member?.membershipStatus ||
+          member?.raw?.membership_status ||
+          ""
+      ).trim();
 
-  const getStatus =
-    (expiryDate) => {
+      if (!value) return "Unknown";
 
-      const diffDays =
-        getDaysRemaining(
-          expiryDate
-        );
-
-      if (
-        diffDays === null
-      ) {
-        return "Unknown";
-      }
-
-      if (
-        diffDays < 0
-      ) {
-        return "Expired";
-      }
-
-      if (
-        diffDays === 0
-      ) {
-        return "Expires Today";
-      }
-
-      if (
-        diffDays <= 5
-      ) {
-        return (
-          `Expiring in ${diffDays} day${
-            diffDays === 1
-              ? ""
-              : "s"
-          }`
-        );
-      }
-
-      return "Active";
+      return value
+        .replace(/_/g, " ")
+        .replace(/\b\w/g, (letter) => letter.toUpperCase());
     };
 
   // ==========================================================
@@ -289,7 +265,7 @@ function Members() {
   // DISPLAY EXPIRY
   // ==========================================================
 
-  const getExpiryDisplay =
+  const getDateDisplay =
     (expiryDate) => {
 
       const expiry =
@@ -498,23 +474,26 @@ function Members() {
   const getStatusBadgeClass =
     (statusType) => {
 
+      const normalizedStatus =
+        String(statusType || "").toLowerCase();
+
       if (
-        statusType ===
-        "Active"
+        normalizedStatus ===
+        "active"
       ) {
         return "bg-success";
       }
 
       if (
-        statusType ===
-        "Expired"
+        normalizedStatus ===
+        "expired"
       ) {
         return "bg-danger";
       }
 
       if (
-        statusType ===
-        "Expiring Soon"
+        normalizedStatus ===
+        "expiring soon"
       ) {
         return "bg-warning text-dark";
       }
@@ -981,6 +960,10 @@ function Members() {
                   </th>
 
                   <th>
+                    Start Date
+                  </th>
+
+                  <th>
                     Expiry
                   </th>
 
@@ -1009,14 +992,10 @@ function Members() {
                             resolveExpiry(m);
 
                           const statusType =
-                            getStatusType(
-                              expiry
-                            );
+                            getMembershipStatus(m);
 
                           const status =
-                            getStatus(
-                              expiry
-                            );
+                            getMembershipStatus(m);
 
                           return (
 
@@ -1090,11 +1069,21 @@ function Members() {
                               {/* ================================= */}
 
                               <td>
+                                <strong>
+                                  {
+                                    getDateDisplay(
+                                      resolveStartDate(m)
+                                    )
+                                  }
+                                </strong>
+                              </td>
+
+                              <td>
 
                                 <strong>
 
                                   {
-                                    getExpiryDisplay(
+                                    getDateDisplay(
                                       expiry
                                     )
                                   }

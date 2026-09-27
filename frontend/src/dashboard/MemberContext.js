@@ -94,6 +94,10 @@ const normalizeMember = (row) => {
 
   const startDate = formatDate(rawStartDate);
   const expiryDate = formatDate(rawExpiryDate);
+  const membershipStatus =
+    row.membership_status ||
+    row.membership?.status ||
+    "";
 
   let durationDays = Number(
     row.duration_days ??
@@ -184,8 +188,11 @@ const normalizeMember = (row) => {
     discount: Number(row.discount ?? 0),
     paymentMode: row.payment_method || row.paymentMode || "Cash",
 
-    status: row.membership_status || row.status || "Active",
-    membershipStatus: row.membership_status || row.status || "Active",
+    status: membershipStatus || row.status || "Active",
+    membershipStatus,
+    biometricSyncAction: row.biometric_sync_action || "",
+    biometricSyncStatus: row.biometric_sync_status || "",
+    biometricSyncError: row.biometric_sync_error || "",
 
     biometricUserId:
       row.biometric_user_id || row.biometricUserId || String(employeeCode),
@@ -528,8 +535,9 @@ export function MemberProvider({ children }) {
       if (savedMember) {
         const normalizedSaved = normalizeMember({
           ...savedMember,
-          membership_start_date: renewalDetails.startDate || savedMembership?.start_date,
-          membership_end_date: renewalDetails.expiryDate || savedMembership?.end_date,
+          membership_status: savedMembership?.status,
+          membership_start_date: savedMembership?.start_date || renewalDetails.startDate,
+          membership_end_date: savedMembership?.end_date || renewalDetails.expiryDate,
           plan_name: renewalDetails.plan,
           final_amount: savedPayment?.amount,
           payment_method: savedPayment?.payment_method,
@@ -545,8 +553,8 @@ export function MemberProvider({ children }) {
       setRenewalData({
         memberId: id,
         ...renewalDetails,
-        startDate: renewalDetails.startDate || savedMembership?.start_date,
-        expiryDate: renewalDetails.expiryDate || savedMembership?.end_date,
+        startDate: savedMembership?.start_date || renewalDetails.startDate,
+        expiryDate: savedMembership?.end_date || renewalDetails.expiryDate,
         receiptNumber: result?.receipt?.receipt_number || renewalDetails.receiptNumber || "",
         receiptId: result?.receipt?.id || "",
         paymentId: savedPayment?.id || "",

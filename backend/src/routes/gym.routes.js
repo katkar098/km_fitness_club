@@ -10,15 +10,14 @@ const {
   receiptDownloadUrl,
 } = require("../services/receiptPdf.service");
 
-const {
-  getUsers: getDirectBiometricUsers,
-  getStatus: getBiometricDeviceStatus,
-  normalizeBiometricId,
-} = require("../services/zkDevice.service");
-
 const router = express.Router();
 
 router.use(auth);
+
+const normalizeBiometricId = (value) =>
+  String(value ?? "")
+    .trim()
+    .replace(/^0+(\d)/, "$1");
 
 // ============================================================
 // HELPERS
@@ -382,210 +381,11 @@ router.put(
   }
 );
 
-// ============================================================
-// DIRECT BIOMETRIC MACHINE USERS
-// ============================================================
-
-router.get(
-  "/biometric/users",
-  async (req, res, next) => {
-    try {
-      const DEVICE_IP =
-        process.env.ZK_DEVICE_IP ||
-        "192.168.0.201";
-
-      const DEVICE_PORT = Number(
-        process.env.ZK_DEVICE_PORT ||
-        4370
-      );
-
-      const deviceResult =
-        await getDirectBiometricUsers();
-
-      const machineUsers =
-        Array.isArray(deviceResult)
-          ? deviceResult
-          : Array.isArray(
-              deviceResult?.users
-            )
-            ? deviceResult.users
-            : Array.isArray(
-                deviceResult?.data
-              )
-              ? deviceResult.data
-              : [];
-
-      const normalizeId = (value) => {
-        if (
-          typeof normalizeBiometricId ===
-          "function"
-        ) {
-          return normalizeBiometricId(
-            value
-          );
-        }
-
-        return String(value || "")
-          .trim()
-          .replace(/^0+(\d)/, "$1");
-      };
-
-      const normalizedMachineUsers =
-        machineUsers
-          .map((user) => {
-            const biometricId =
-              normalizeId(
-                user.biometric_user_id ??
-                  user.employee_code ??
-                  user.userid ??
-                  user.userId ??
-                  user.userID ??
-                  user.uid
-              );
-
-            const name = String(
-              user.full_name ??
-                user.name ??
-                user.username ??
-                ""
-            ).trim();
-
-            const cardNo =
-              user.card_no ??
-              user.cardno ??
-              user.cardNo ??
-              "";
-
-            return {
-              ...user,
-              biometric_user_id:
-                biometricId,
-              employee_code:
-                biometricId,
-              full_name:
-                name || null,
-              name:
-                name || null,
-              card_no:
-                cardNo || null,
-              machine_uid:
-                user.machine_uid ??
-                user.uid ??
-                null,
-            };
-          })
-          .filter(
-            (user) =>
-              user.biometric_user_id
-          );
-
-      const uniqueMachineUsers = [];
-      const machineIdSet = new Set();
-
-      for (
-        const user of normalizedMachineUsers
-      ) {
-        const id = normalizeId(
-          user.biometric_user_id
-        );
-
-        if (
-          !id ||
-          machineIdSet.has(id)
-        ) {
-          continue;
-        }
-
-        machineIdSet.add(id);
-        uniqueMachineUsers.push(user);
-      }
-
-      const {
-        rows: registeredMembers,
-      } = await query(`
-        SELECT
-          id,
-          member_code,
-          full_name,
-          biometric_user_id
-
-        FROM members
-
-        WHERE biometric_machine_member = TRUE
-          AND biometric_user_id IS NOT NULL
-          AND btrim(
-            biometric_user_id
-          ) <> ''
-      `);
-
-      const registeredIds = new Set(
-        registeredMembers
-          .map((member) =>
-            normalizeId(
-              member.biometric_user_id
-            )
-          )
-          .filter(Boolean)
-      );
-
-      const availableUsers =
-        uniqueMachineUsers
-          .filter((user) => {
-            const id = normalizeId(
-              user.biometric_user_id
-            );
-
-            return (
-              id &&
-              !registeredIds.has(id)
-            );
-          })
-          .sort((a, b) =>
-            String(
-              a.biometric_user_id
-            ).localeCompare(
-              String(
-                b.biometric_user_id
-              ),
-              undefined,
-              {
-                numeric: true,
-                sensitivity: "base",
-              }
-            )
-          );
-
-      return res.json({
-        success: true,
-        source:
-          "biometric_machine",
-
-        device: {
-          ip: DEVICE_IP,
-          port: DEVICE_PORT,
-        },
-
-        machineUserCount:
-          uniqueMachineUsers.length,
-
-        registeredUserCount:
-          registeredIds.size,
-
-        availableUserCount:
-          availableUsers.length,
-
-        data:
-          availableUsers,
-      });
-    } catch (error) {
-      console.error(
-        "DIRECT BIOMETRIC USER ERROR:",
-        error
-      );
-
-      return next(error);
-    }
-  }
+router.get("/biometric/users", (req, res) =>
+  res.status(410).json({
+    success: false,
+    message: "Biometric user discovery is handled by km-sync.",
+  })
 );
 
 // ============================================================
@@ -644,7 +444,12 @@ router.get(
             p.duration_days AS plan_duration_days,
 
             pay.amount AS final_amount,
-            pay.payment_method
+            pay.payment_method,
+
+            sync.action AS biometric_sync_action,
+            sync.status AS biometric_sync_status,
+            sync.last_error AS biometric_sync_error,
+            sync.processed_at AS biometric_sync_processed_at
 
           FROM members m
 
@@ -680,6 +485,18 @@ router.get(
 
             LIMIT 1
           ) pay ON TRUE
+
+          LEFT JOIN LATERAL (
+            SELECT
+              action,
+              status,
+              last_error,
+              processed_at
+            FROM biometric_sync_queue
+            WHERE member_id = m.id
+            ORDER BY created_at DESC
+            LIMIT 1
+          ) sync ON TRUE
 
           WHERE
             m.biometric_machine_member = TRUE
@@ -737,7 +554,12 @@ router.get(
             p.duration_days AS plan_duration_days,
 
             pay.amount AS final_amount,
-            pay.payment_method
+            pay.payment_method,
+
+            sync.action AS biometric_sync_action,
+            sync.status AS biometric_sync_status,
+            sync.last_error AS biometric_sync_error,
+            sync.processed_at AS biometric_sync_processed_at
 
           FROM members m
 
@@ -773,6 +595,18 @@ router.get(
 
             LIMIT 1
           ) pay ON TRUE
+
+          LEFT JOIN LATERAL (
+            SELECT
+              action,
+              status,
+              last_error,
+              processed_at
+            FROM biometric_sync_queue
+            WHERE member_id = m.id
+            ORDER BY created_at DESC
+            LIMIT 1
+          ) sync ON TRUE
 
           WHERE
             m.id = $1
@@ -962,6 +796,9 @@ router.post(
                   normalizedBiometricUserId,
                 ]
               );
+
+            const isNewMember =
+              existingResult.rows.length === 0;
 
             if (
               existingResult.rows[0]
@@ -1257,11 +1094,36 @@ router.post(
               [member.id]
             );
 
-            await queueBiometricAccessChange(
-              db,
-              member.id,
-              "enable"
-            );
+            if (isNewMember) {
+              const syncResult = await db.query(
+                `
+                  INSERT INTO biometric_sync_queue(
+                    member_id,
+                    action
+                  )
+                  VALUES($1, 'create')
+                  RETURNING action, status, last_error, processed_at
+                `,
+                [member.id]
+              );
+
+              Object.assign(member, {
+                biometric_sync_action:
+                  syncResult.rows[0].action,
+                biometric_sync_status:
+                  syncResult.rows[0].status,
+                biometric_sync_error:
+                  syncResult.rows[0].last_error,
+                biometric_sync_processed_at:
+                  syncResult.rows[0].processed_at,
+              });
+            } else {
+              await queueBiometricAccessChange(
+                db,
+                member.id,
+                "enable"
+              );
+            }
 
             await audit(
               db,
@@ -1898,6 +1760,33 @@ router.post(
               member.id,
               "enable"
             );
+
+            const syncResult = await db.query(
+              `
+                SELECT
+                  action,
+                  status,
+                  last_error,
+                  processed_at
+                FROM biometric_sync_queue
+                WHERE member_id = $1
+                ORDER BY created_at DESC
+                LIMIT 1
+              `,
+              [member.id]
+            );
+
+            const sync = syncResult.rows[0];
+            Object.assign(updatedMember, {
+              biometric_sync_action:
+                sync?.action || null,
+              biometric_sync_status:
+                sync?.status || null,
+              biometric_sync_error:
+                sync?.last_error || null,
+              biometric_sync_processed_at:
+                sync?.processed_at || null,
+            });
 
             // ------------------------------------------------
             // AUDIT

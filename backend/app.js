@@ -118,7 +118,7 @@ const frontendPath = path.join(
   __dirname,
   '..',
   'frontend',
-  'dist'
+  'build'
 );
 
 app.use(

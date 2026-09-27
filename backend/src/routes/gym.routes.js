@@ -392,6 +392,33 @@ router.get("/biometric/users", (req, res) =>
 // MEMBERS
 // ============================================================
 
+router.get(
+  "/members/unregistered-biometric-users",
+  async (req, res, next) => {
+    try {
+      const { rows } = await query(`
+        SELECT biometric_id, name, machine_user_id, member_id, sync_status
+        FROM biometric_users
+        WHERE sync_status = 'unregistered'
+          AND member_id IS NULL
+        ORDER BY name ASC NULLS LAST, biometric_id ASC
+      `);
+
+      return res.json({
+        success: true,
+        count: rows.length,
+        data: rows,
+      });
+    } catch (error) {
+      console.error("Failed to load unregistered biometric users:", error);
+      return res.status(500).json({
+        success: false,
+        message: "Unable to load unregistered biometric users.",
+      });
+    }
+  }
+);
+
 /*
   IMPORTANT FIX:
 
@@ -762,6 +789,13 @@ router.post(
               );
             }
 
+            // Serialize claims by normalized biometric ID. The conditional
+            // UPDATE below remains the final guard across concurrent admins.
+            await db.query(
+              "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+              [`member-biometric:${normalizedBiometricUserId}`]
+            );
+
             const existingResult =
               await db.query(
                 `
@@ -955,6 +989,31 @@ router.post(
                 ]
               )).rows[0];
 
+            const biometricResult = await db.query(
+              `
+                UPDATE biometric_users
+                SET member_id = $1,
+                    sync_status = 'registered'
+                WHERE biometric_id::text = $2
+                  AND sync_status = 'unregistered'
+                  AND member_id IS NULL
+                RETURNING
+                  biometric_id,
+                  name,
+                  machine_user_id,
+                  member_id,
+                  sync_status
+              `,
+              [member.id, String(biometricUserId).trim()]
+            );
+
+            if (!biometricResult.rows[0]) {
+              throw fail(
+                409,
+                "The selected biometric user is no longer available for registration. It may already be registered."
+              );
+            }
+
             const membershipResult =
               await db.query(
                 `
@@ -1145,6 +1204,7 @@ router.post(
 
             return {
               member,
+              biometricUser: biometricResult.rows[0],
               membership,
               payment,
               receipt,
@@ -1167,6 +1227,23 @@ router.post(
         data,
       });
     } catch (error) {
+      if (error.code === "23505") {
+        return res.status(409).json({
+          success: false,
+          message: /biometric/i.test(`${error.constraint || ""} ${error.detail || ""}`)
+            ? "This biometric user is already registered to an existing member."
+            : "A member with this information already exists.",
+        });
+      }
+
+      if (error.code) {
+        console.error("Member enrollment database error:", error);
+        return res.status(500).json({
+          success: false,
+          message: "Unable to create the member due to a database error. Please try again.",
+        });
+      }
+
       next(error);
     }
   }

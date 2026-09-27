@@ -596,6 +596,38 @@ function RenewMembership() {
       return;
     }
 
+    // After a renewal is saved, `member.expiryDate` is updated to the new
+    // date. Reuse the pre-renewal expiry captured in the saved receipt for
+    // this same member instead of labeling the new date as the old expiry.
+    let savedRenewalReceipt = null;
+    try {
+      savedRenewalReceipt = JSON.parse(
+        localStorage.getItem("km_renewal_receipt") || "null"
+      );
+    } catch {
+      savedRenewalReceipt = null;
+    }
+
+    const currentMemberIds = [
+      member.memberId,
+      member.databaseId,
+      member.uuid,
+      member.id,
+    ]
+      .filter(Boolean)
+      .map(String);
+    const savedReceiptMemberId = String(
+      savedRenewalReceipt?.memberId ||
+        savedRenewalReceipt?.databaseId ||
+        ""
+    );
+    const savedOldExpiryDate =
+      savedReceiptMemberId && currentMemberIds.includes(savedReceiptMemberId)
+        ? savedRenewalReceipt?.oldExpiryDate ||
+          savedRenewalReceipt?.old_expiry_date ||
+          ""
+        : "";
+
     const receiptData = {
       memberId:
         member.memberId ||
@@ -628,6 +660,7 @@ function RenewMembership() {
       paymentMode,
 
       oldExpiryDate:
+        savedOldExpiryDate ||
         member.expiryDate ||
         member.endDate ||
         "",

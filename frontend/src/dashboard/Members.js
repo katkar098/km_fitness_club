@@ -991,11 +991,17 @@ function Members() {
                           const expiry =
                             resolveExpiry(m);
 
-                          const statusType =
-                            getMembershipStatus(m);
+                          const expiryStatus =
+                            getStatusType(expiry);
 
+                          // Derive status from the membership expiry date when
+                          // available, since the stored status can be stale.
                           const status =
-                            getMembershipStatus(m);
+                            expiryStatus === "Unknown"
+                              ? getMembershipStatus(m)
+                              : expiryStatus;
+
+                          const statusType = status;
 
                           return (
 

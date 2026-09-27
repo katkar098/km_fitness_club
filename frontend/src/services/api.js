@@ -3,7 +3,7 @@ import axios from "axios";
 const api = axios.create({
   baseURL:
     process.env.REACT_APP_API_URL ||
-    "http://localhost:5000/api",
+    "/api",
 
   headers: {
     "Content-Type": "application/json",
@@ -31,7 +31,7 @@ api.interceptors.request.use(async (config) => {
         localStorage.getItem("refreshToken");
 
       const response = await fetch(
-        "http://localhost:5000/api/auth/refresh",
+        "/api/auth/refresh",
         {
           method: "POST",
           headers: {

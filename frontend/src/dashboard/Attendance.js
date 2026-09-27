@@ -1421,10 +1421,18 @@ function Attendance() {
   // ==========================================================
 
   const checkedInCount =
-    attendance.filter(
-      (row) =>
-        row.checkedIn
-    ).length;
+    new Set(
+      attendance
+        .filter((row) => row.checkedIn)
+        .map((row) =>
+          normalizeId(
+            row.biometricId ||
+            row.employeeCode ||
+            row._key
+          )
+        )
+        .filter(Boolean)
+    ).size;
 
   const notCheckedInCount =
     attendance.filter(

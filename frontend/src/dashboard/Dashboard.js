@@ -195,10 +195,22 @@ function Dashboard() {
       getMemberStatus(member) === "active"
   ).length;
 
-  const expiredMembers = members.filter(
+  const expiredMembersCount = members.filter(
     (member) =>
       getMemberStatus(member) === "expired"
   ).length;
+
+  const expiredMemberList = useMemo(
+    () =>
+      members
+        .map((member) => ({
+          ...member,
+          daysRemaining: getDaysUntilExpiry(member),
+        }))
+        .filter((member) => member.daysRemaining !== null && member.daysRemaining < 0)
+        .sort((a, b) => a.daysRemaining - b.daysRemaining),
+    [members]
+  );
 
   // =====================================================
   // EXPIRING SOON MEMBERS
@@ -420,7 +432,7 @@ function Dashboard() {
                 </h6>
 
                 <h2 className="fw-bold">
-                  {expiredMembers}
+              {expiredMembersCount}
                 </h2>
 
               </div>
@@ -621,6 +633,59 @@ function Dashboard() {
         </div>
 
         {/* =================================================
+            EXPIRED MEMBERS
+        ================================================= */}
+
+        <div className="card shadow border-0 mt-4">
+          <div className="card-header bg-danger text-white d-flex justify-content-between align-items-center">
+            <span>
+              <i className="fa fa-exclamation-circle me-2"></i>
+              Expired Memberships
+            </span>
+            <span className="badge bg-light text-danger">
+              {expiredMemberList.length} Members
+            </span>
+          </div>
+
+          <div className="card-body">
+            {expiredMemberList.length === 0 ? (
+              <div className="text-center text-muted py-4">
+                No expired memberships.
+              </div>
+            ) : (
+              <div className="table-responsive">
+                <table className="table table-hover align-middle mb-0">
+                  <thead>
+                    <tr>
+                      <th>Employee Code</th>
+                      <th>Name</th>
+                      <th>Mobile</th>
+                      <th>Expiry Date</th>
+                      <th>Expired</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {expiredMemberList.map((member, index) => (
+                      <tr key={member.memberId || member.databaseId || member.id || index}>
+                        <td><strong>{member.employeeCode || member.memberCode || member.member_code || member.id || "-"}</strong></td>
+                        <td>{member.name || member.full_name || "-"}</td>
+                        <td>{member.mobile || member.phone || "-"}</td>
+                        <td>{formatDate(getExpiryDate(member))}</td>
+                        <td>
+                          <span className="badge bg-danger">
+                            {Math.abs(member.daysRemaining)} {Math.abs(member.daysRemaining) === 1 ? "day" : "days"} ago
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* =================================================
             MEMBER STATUS
         ================================================= */}
 
@@ -665,7 +730,7 @@ function Dashboard() {
                 </h6>
 
                 <h4 className="fw-bold text-danger">
-                  {expiredMembers}
+                  {expiredMembersCount}
                 </h4>
 
               </div>

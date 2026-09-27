@@ -134,6 +134,19 @@ function describeDbError(err) {
   return combined || "A database error occurred.";
 }
 
+function duplicateMemberMessage(err) {
+  const duplicateText = [err?.constraint, err?.detail, err?.message]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+
+  if (/biometric|member_code|employee_code/.test(duplicateText)) {
+    return "This biometric user is already registered to an existing member.";
+  }
+
+  return "A member with this information already exists.";
+}
+
 // ============================================================
 // ENROLL MEMBER
 // ============================================================
@@ -170,6 +183,14 @@ async function enrollMember(req, res) {
     if (!finalMemberCode) {
       throw new Error("Biometric Employee Code is required.");
     }
+
+    // Serialize enrollments for the same normalized biometric ID. The
+    // unique indexes remain the final safeguard, while this prevents two
+    // simultaneous admins from both passing the application-level check.
+    await client.query(
+      "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+      [`member-biometric:${finalMemberCode}`]
+    );
 
     console.log("====================================");
     console.log("BIOMETRIC USER ID:", body.biometricUserId);
@@ -234,13 +255,11 @@ async function enrollMember(req, res) {
     );
 
     if (existingMember.rows.length > 0) {
-      const existing = existingMember.rows[0];
-
-      throw new Error(
-        `Employee Code ${finalMemberCode} is already registered to ` +
-          `${existing.full_name || "an existing member"} ` +
-          `(member code ${existing.member_code || existing.employee_code}).`
+      const error = new Error(
+        "This biometric user is already registered to an existing member."
       );
+      error.status = 409;
+      throw error;
     }
 
     // ========================================================
@@ -301,10 +320,8 @@ async function enrollMember(req, res) {
 
       member = memberResult.rows[0];
     } catch (dbError) {
-      // Whether this is a raw unique_violation (23505) or a
-      // trigger's RAISE EXCEPTION, describeDbError() pulls out
-      // every field pg gives us instead of losing the detail.
-      throw new Error(describeDbError(dbError));
+      // Keep the SQLSTATE so the outer handler can safely translate it.
+      throw dbError;
     }
 
     // ========================================================
@@ -371,7 +388,7 @@ async function enrollMember(req, res) {
 
         membership = membershipResult.rows[0];
       } catch (dbError) {
-        throw new Error(describeDbError(dbError));
+        throw dbError;
       }
     }
 
@@ -412,7 +429,7 @@ async function enrollMember(req, res) {
           ]
         );
       } catch (dbError) {
-        throw new Error(describeDbError(dbError));
+        throw dbError;
       }
     }
 
@@ -473,9 +490,19 @@ async function enrollMember(req, res) {
       });
     }
 
-    return res.status(400).json({
+    const errorText = [err.message, err.detail, err.constraint]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase();
+    const isDuplicate = err.code === "23505" ||
+      /duplicate entry|duplicate key|unique constraint|already exists/.test(errorText);
+    const message = isDuplicate
+      ? duplicateMemberMessage(err)
+      : describeDbError(err);
+
+    return res.status(isDuplicate ? 409 : (err.status || 400)).json({
       success: false,
-      message: describeDbError(err),
+      message,
     });
   } finally {
     client.release();

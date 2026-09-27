@@ -487,7 +487,7 @@ function Dashboard() {
                     <tr>
 
                       <th>
-                        Employee Code
+                        Member Code
                       </th>
 
                       <th>
@@ -657,7 +657,7 @@ function Dashboard() {
                 <table className="table table-hover align-middle mb-0">
                   <thead>
                     <tr>
-                      <th>Employee Code</th>
+                      <th>Member Code</th>
                       <th>Name</th>
                       <th>Mobile</th>
                       <th>Expiry Date</th>

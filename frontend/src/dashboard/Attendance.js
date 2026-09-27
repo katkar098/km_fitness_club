@@ -1674,7 +1674,7 @@ function Attendance() {
                 <input
                   type="text"
                   className="form-control"
-                  placeholder="Search Employee Code / Name / Mobile"
+                  placeholder="Search Member Code / Name / Mobile"
                   value={
                     search
                   }
@@ -1844,7 +1844,7 @@ function Attendance() {
                   <th
                     className="text-center"
                   >
-                    Employee Code
+                    Member Code
                   </th>
 
                   <th>

@@ -1,0 +1,713 @@
+const memberService =
+  require("../services/member.service");
+
+const db =
+  require("../config/db");
+
+// ============================================================
+// GET ALL MEMBERS
+// ============================================================
+
+async function getAllMembers(req, res) {
+  try {
+    const members =
+      await memberService.getAllMembers();
+
+    return res.status(200).json({
+      success: true,
+      count: members.length,
+      data: members,
+    });
+  } catch (err) {
+    console.error("getAllMembers error:", err);
+
+    return res.status(500).json({
+      success: false,
+      message: err.message,
+    });
+  }
+}
+
+// ============================================================
+// SEARCH MEMBERS
+// ============================================================
+
+async function searchMembers(req, res) {
+  try {
+    const search = req.query.q || req.query.search || "";
+
+    const members = await memberService.searchMembers(search);
+
+    return res.status(200).json({
+      success: true,
+      count: members.length,
+      data: members,
+    });
+  } catch (err) {
+    console.error("searchMembers error:", err);
+
+    return res.status(500).json({
+      success: false,
+      message: err.message,
+    });
+  }
+}
+
+// ============================================================
+// GET MEMBER
+// ============================================================
+
+async function getMemberById(req, res) {
+  try {
+    const member = await memberService.getMemberById(req.params.id);
+
+    if (!member) {
+      return res.status(404).json({
+        success: false,
+        message: "Member not found",
+      });
+    }
+
+    return res.json({
+      success: true,
+      data: member,
+    });
+  } catch (err) {
+    console.error("getMemberById error:", err);
+
+    return res.status(500).json({
+      success: false,
+      message: err.message,
+    });
+  }
+}
+
+// ============================================================
+// CREATE NORMAL MEMBER
+// ============================================================
+
+async function createMember(req, res) {
+  try {
+    const member = await memberService.createMember(req.body);
+
+    return res.status(201).json({
+      success: true,
+      message: "Member created successfully",
+      data: member,
+    });
+  } catch (err) {
+    console.error("createMember error:", err);
+
+    return res.status(400).json({
+      success: false,
+      message: err.message,
+    });
+  }
+}
+
+// ============================================================
+// HELPER: turn a raw Postgres error into a specific, honest
+// message instead of ever falling back to something generic.
+//
+// pg exposes these fields on error objects for constraint
+// violations and RAISE EXCEPTION alike:
+//   err.code       -> '23505' for unique_violation
+//   err.detail     -> e.g. "Key (member_code)=(4) already exists."
+//   err.constraint -> the constraint/index name
+//   err.table      -> the table involved
+//   err.message    -> for RAISE EXCEPTION, the exact text raised
+//                      (e.g. from a trigger) — plus err.detail /
+//                      err.hint if the trigger supplied them via
+//                      RAISE EXCEPTION '...' USING DETAIL = '...'
+// ============================================================
+
+function describeDbError(err) {
+  const parts = [];
+
+  if (err.message) parts.push(err.message);
+  if (err.detail) parts.push(err.detail);
+  if (err.constraint) parts.push(`(constraint: ${err.constraint})`);
+  if (err.table && !err.detail) parts.push(`(table: ${err.table})`);
+
+  const combined = parts.filter(Boolean).join(" ");
+
+  return combined || "A database error occurred.";
+}
+
+// ============================================================
+// ENROLL MEMBER
+// ============================================================
+
+async function enrollMember(req, res) {
+  const client = await db.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    const body = req.body || {};
+
+    // ========================================================
+    // EMPLOYEE CODE
+    //
+    // BIOMETRIC USER ID IS THE SOURCE OF TRUTH.
+    // ========================================================
+
+    const rawBiometricEmployeeCode =
+      body.biometricUserId || body.employeeCode || body.memberCode;
+
+    if (!rawBiometricEmployeeCode) {
+      throw new Error("Biometric Employee Code is required.");
+    }
+
+    // Normalize leading zeros the same way the rest of the app
+    // does (e.g. "007", "07", "7" should all be treated as the
+    // same code) — this keeps the duplicate check consistent
+    // with how biometric IDs are normalized elsewhere.
+    const finalMemberCode = String(rawBiometricEmployeeCode)
+      .trim()
+      .replace(/^0+(\d)/, "$1");
+
+    if (!finalMemberCode) {
+      throw new Error("Biometric Employee Code is required.");
+    }
+
+    console.log("====================================");
+    console.log("BIOMETRIC USER ID:", body.biometricUserId);
+    console.log("REQUEST EMPLOYEE CODE:", body.employeeCode);
+    console.log("REQUEST MEMBER CODE:", body.memberCode);
+    console.log("FINAL EMPLOYEE CODE:", finalMemberCode);
+    console.log("====================================");
+
+    // ========================================================
+    // MANUAL START / EXPIRY DATE
+    // ========================================================
+
+    const startDate = body.startDate;
+
+    if (!startDate) {
+      throw new Error("Membership start date is required.");
+    }
+
+    const expiryDate = body.expiryDate;
+
+    if (!expiryDate) {
+      throw new Error("Membership expiry date is required.");
+    }
+
+    const start = new Date(`${startDate}T00:00:00`);
+    const expiry = new Date(`${expiryDate}T00:00:00`);
+
+    if (Number.isNaN(start.getTime())) {
+      throw new Error("Invalid membership start date.");
+    }
+
+    if (Number.isNaN(expiry.getTime())) {
+      throw new Error("Invalid membership expiry date.");
+    }
+
+    if (expiry < start) {
+      throw new Error("Membership expiry date cannot be before start date.");
+    }
+
+    // ========================================================
+    // CHECK EXISTING MEMBER (normalized, with detail)
+    //
+    // Also normalizes stored values the same way, so "007" in
+    // the DB still matches "7" coming from the request — this
+    // was the gap that let a real duplicate slip past the old
+    // check and hit a raw DB constraint (or trigger) instead,
+    // which is why you were seeing a generic error with no
+    // useful detail.
+    // ========================================================
+
+    const existingMember = await client.query(
+      `
+      SELECT id, full_name, member_code, employee_code, biometric_user_id
+      FROM members
+      WHERE
+        regexp_replace(btrim(member_code), '^0+(\\d)', '\\1') = $1
+        OR regexp_replace(btrim(employee_code), '^0+(\\d)', '\\1') = $1
+        OR regexp_replace(btrim(biometric_user_id), '^0+(\\d)', '\\1') = $1
+      LIMIT 1
+      `,
+      [finalMemberCode]
+    );
+
+    if (existingMember.rows.length > 0) {
+      const existing = existingMember.rows[0];
+
+      throw new Error(
+        `Employee Code ${finalMemberCode} is already registered to ` +
+          `${existing.full_name || "an existing member"} ` +
+          `(member code ${existing.member_code || existing.employee_code}).`
+      );
+    }
+
+    // ========================================================
+    // CREATE MEMBER
+    // ========================================================
+
+    let member;
+
+    try {
+      const memberResult = await client.query(
+        `
+        INSERT INTO members (
+          member_code,
+          biometric_user_id,
+          employee_code,
+
+          full_name,
+          phone,
+          email,
+          gender,
+          date_of_birth,
+          address,
+
+          emergency_contact_name,
+          emergency_contact_phone,
+
+          status,
+          biometric_enabled,
+
+          created_at,
+          updated_at
+        )
+        VALUES (
+          $1, $2, $3,
+          $4, $5, $6, $7, $8, $9,
+          $10, $11,
+          'active', true,
+          NOW(), NOW()
+        )
+        RETURNING *;
+        `,
+        [
+          finalMemberCode,
+          String(body.biometricUserId || finalMemberCode),
+          finalMemberCode,
+
+          body.fullName,
+          body.phone || null,
+          body.email || null,
+          body.gender || null,
+          body.dateOfBirth || null,
+          body.address || null,
+
+          body.emergencyContactName || null,
+          body.emergencyContactPhone || null,
+        ]
+      );
+
+      member = memberResult.rows[0];
+    } catch (dbError) {
+      // Whether this is a raw unique_violation (23505) or a
+      // trigger's RAISE EXCEPTION, describeDbError() pulls out
+      // every field pg gives us instead of losing the detail.
+      throw new Error(describeDbError(dbError));
+    }
+
+    // ========================================================
+    // CREATE MEMBERSHIP
+    // ========================================================
+
+    let membership = null;
+
+    if (body.planId) {
+      const planResult = await client.query(
+        `
+        SELECT *
+        FROM membership_plans
+        WHERE id = $1
+        LIMIT 1
+        `,
+        [body.planId]
+      );
+
+      if (planResult.rows.length === 0) {
+        throw new Error("Membership plan not found.");
+      }
+
+      const plan = planResult.rows[0];
+
+      try {
+        const membershipResult = await client.query(
+          `
+          INSERT INTO memberships (
+            member_id,
+            plan_id,
+
+            start_date,
+            end_date,
+
+            status,
+            amount,
+
+            created_at,
+            updated_at
+          )
+          VALUES (
+            $1, $2,
+            $3, $4,
+            'active', $5,
+            NOW(), NOW()
+          )
+          RETURNING *;
+          `,
+          [
+            member.id,
+            body.planId,
+            startDate,
+            expiryDate,
+            Number(
+              body.amount ||
+                body.finalAmount ||
+                body.baseAmount ||
+                plan.price ||
+                0
+            ),
+          ]
+        );
+
+        membership = membershipResult.rows[0];
+      } catch (dbError) {
+        throw new Error(describeDbError(dbError));
+      }
+    }
+
+    // ========================================================
+    // PAYMENT
+    // ========================================================
+
+    const paymentAmount = Number(body.amount || body.finalAmount || 0);
+
+    if (paymentAmount > 0) {
+      try {
+        await client.query(
+          `
+          INSERT INTO payments (
+            member_id,
+            membership_id,
+
+            amount,
+            payment_method,
+
+            payment_date,
+            status,
+
+            created_at
+          )
+          VALUES (
+            $1, $2,
+            $3, $4,
+            CURRENT_DATE, 'paid',
+            NOW()
+          )
+          `,
+          [
+            member.id,
+            membership ? membership.id : null,
+            paymentAmount,
+            body.paymentMethod || "cash",
+          ]
+        );
+      } catch (dbError) {
+        throw new Error(describeDbError(dbError));
+      }
+    }
+
+    // ========================================================
+    // COMMIT
+    // ========================================================
+
+    await client.query("COMMIT");
+
+    const finalStartDate = membership?.start_date || startDate;
+    const finalExpiryDate = membership?.end_date || expiryDate;
+
+    const returnedMemberCode = String(
+      member.biometric_user_id ||
+        member.employee_code ||
+        member.member_code ||
+        finalMemberCode
+    ).trim();
+
+    return res.status(201).json({
+      success: true,
+      message: "Member enrolled successfully",
+
+      data: {
+        member,
+        membership,
+
+        memberCode: returnedMemberCode,
+        employeeCode: returnedMemberCode,
+
+        startDate: finalStartDate,
+        expiryDate: finalExpiryDate,
+        endDate: finalExpiryDate,
+        membershipStartDate: finalStartDate,
+        membershipExpiryDate: finalExpiryDate,
+      },
+    });
+  } catch (err) {
+    try {
+      await client.query("ROLLBACK");
+    } catch (rollbackError) {
+      console.error("Rollback error:", rollbackError);
+    }
+
+    console.error("enrollMember error:", err);
+
+    // If somehow a bare/generic message still slips through
+    // (e.g. a trigger that raises "Duplicate entry found" with
+    // no detail at all), at least log the raw error object so
+    // you can inspect err.constraint / err.table / err.detail
+    // in your server logs even when the JSON response is thin.
+    if (err.code === "23505" || err.constraint || err.detail) {
+      console.error("DB ERROR DETAIL:", {
+        code: err.code,
+        detail: err.detail,
+        constraint: err.constraint,
+        table: err.table,
+      });
+    }
+
+    return res.status(400).json({
+      success: false,
+      message: describeDbError(err),
+    });
+  } finally {
+    client.release();
+  }
+}
+
+// ============================================================
+// UPDATE MEMBER
+// ============================================================
+
+async function updateMember(req, res) {
+  try {
+    const member = await memberService.updateMember(req.params.id, req.body);
+
+    if (!member) {
+      return res.status(404).json({
+        success: false,
+        message: "Member not found",
+      });
+    }
+
+    return res.json({
+      success: true,
+      message: "Member updated successfully",
+      data: member,
+    });
+  } catch (err) {
+    console.error("updateMember error:", err);
+
+    return res.status(400).json({
+      success: false,
+      message: err.message,
+    });
+  }
+}
+
+// ============================================================
+// DELETE MEMBER
+// ============================================================
+
+async function deleteMember(req, res) {
+  try {
+    const member = await memberService.deleteMember(req.params.id);
+
+    if (!member) {
+      return res.status(404).json({
+        success: false,
+        message: "Member not found",
+      });
+    }
+
+    return res.json({
+      success: true,
+      message: "Member deleted successfully",
+      data: member,
+    });
+  } catch (err) {
+    console.error("deleteMember error:", err);
+
+    return res.status(400).json({
+      success: false,
+      message: err.message,
+    });
+  }
+}
+
+// ============================================================
+// MEMBER MEMBERSHIPS
+// ============================================================
+
+async function getMemberMemberships(req, res) {
+  try {
+    const result = await db.query(
+      `
+      SELECT
+        ms.*,
+        mp.name AS plan_name,
+        mp.duration_months,
+        mp.price
+      FROM memberships ms
+      LEFT JOIN membership_plans mp
+        ON mp.id = ms.plan_id
+      WHERE ms.member_id = $1
+      ORDER BY ms.start_date DESC
+      `,
+      [req.params.id]
+    );
+
+    return res.json({
+      success: true,
+      count: result.rows.length,
+      data: result.rows,
+    });
+  } catch (err) {
+    console.error("getMemberMemberships error:", err);
+
+    return res.status(500).json({
+      success: false,
+      message: err.message,
+    });
+  }
+}
+
+// ============================================================
+// MEMBER PAYMENTS
+// ============================================================
+
+async function getMemberPayments(req, res) {
+  try {
+    const result = await db.query(
+      `
+      SELECT *
+      FROM payments
+      WHERE member_id = $1
+      ORDER BY payment_date DESC,
+               created_at DESC
+      `,
+      [req.params.id]
+    );
+
+    return res.json({
+      success: true,
+      count: result.rows.length,
+      data: result.rows,
+    });
+  } catch (err) {
+    console.error("getMemberPayments error:", err);
+
+    return res.status(500).json({
+      success: false,
+      message: err.message,
+    });
+  }
+}
+
+// ============================================================
+// MEMBER ATTENDANCE
+// ============================================================
+
+async function getMemberAttendance(req, res) {
+  try {
+    const result = await db.query(
+      `
+      SELECT *
+      FROM attendance
+      WHERE member_id = $1
+         OR member_code = (
+              SELECT member_code
+              FROM members
+              WHERE id = $1
+            )
+      ORDER BY punched_at DESC
+      `,
+      [req.params.id]
+    );
+
+    return res.json({
+      success: true,
+      count: result.rows.length,
+      data: result.rows,
+    });
+  } catch (err) {
+    console.error("getMemberAttendance error:", err);
+
+    return res.status(500).json({
+      success: false,
+      message: err.message,
+    });
+  }
+}
+
+// ============================================================
+// PHOTO
+// ============================================================
+
+async function uploadPhoto(req, res) {
+  try {
+    if (!req.file) {
+      return res.status(400).json({
+        success: false,
+        message: "Photo is required.",
+      });
+    }
+
+    const result = await db.query(
+      `
+      UPDATE members
+      SET
+        photo_url = $1,
+        updated_at = NOW()
+      WHERE id = $2
+      RETURNING *;
+      `,
+      [req.file.path || req.file.filename, req.params.id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Member not found.",
+      });
+    }
+
+    return res.json({
+      success: true,
+      message: "Photo uploaded successfully.",
+      data: result.rows[0],
+    });
+  } catch (err) {
+    console.error("uploadPhoto error:", err);
+
+    return res.status(400).json({
+      success: false,
+      message: err.message,
+    });
+  }
+}
+
+// ============================================================
+// EXPORT
+// ============================================================
+
+module.exports = {
+  getAllMembers,
+  searchMembers,
+  getMemberById,
+  createMember,
+  enrollMember,
+  updateMember,
+  deleteMember,
+  getMemberMemberships,
+  getMemberPayments,
+  getMemberAttendance,
+  uploadPhoto,
+};

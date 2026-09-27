@@ -1,0 +1,2302 @@
+const express = require("express");
+const crypto = require("crypto");
+
+const { query, transaction } = require("../config/db");
+const auth = require("../middleware/auth");
+
+const {
+  getReceipt,
+  generateReceiptPdf,
+  receiptDownloadUrl,
+} = require("../services/receiptPdf.service");
+
+const {
+  getUsers: getDirectBiometricUsers,
+  getStatus: getBiometricDeviceStatus,
+  normalizeBiometricId,
+} = require("../services/zkDevice.service");
+
+const router = express.Router();
+
+router.use(auth);
+
+// ============================================================
+// HELPERS
+// ============================================================
+
+const fail = (status, message) =>
+  Object.assign(new Error(message), {
+    statusCode: status,
+  });
+
+const receiptNumber = () =>
+  `KM-${new Date()
+    .toISOString()
+    .slice(0, 10)
+    .replaceAll("-", "")}-${crypto
+    .randomUUID()
+    .slice(0, 8)
+    .toUpperCase()}`;
+
+const memberCode = () =>
+  `KM-${new Date().getFullYear()}-${crypto
+    .randomUUID()
+    .slice(0, 6)
+    .toUpperCase()}`;
+
+// ============================================================
+// DATE HELPERS
+// ============================================================
+
+const isValidDateString = (value) => {
+  if (!value) return false;
+
+  return /^\d{4}-\d{2}-\d{2}$/.test(String(value));
+};
+
+const validateMembershipDates = (startDate, expiryDate) => {
+  if (!isValidDateString(startDate)) {
+    throw fail(
+      422,
+      "A valid membership start date is required"
+    );
+  }
+
+  if (!isValidDateString(expiryDate)) {
+    throw fail(
+      422,
+      "A valid membership expiry date is required"
+    );
+  }
+
+  if (expiryDate < startDate) {
+    throw fail(
+      422,
+      "Expiry date cannot be before the start date"
+    );
+  }
+};
+
+// ============================================================
+// BIOMETRIC QUEUE
+// ============================================================
+
+const queueBiometricAccessChange = async (
+  db,
+  memberId,
+  action
+) => {
+  const allowedActions = new Set([
+    "enable",
+    "disable",
+  ]);
+
+  if (!allowedActions.has(action)) {
+    throw new Error(
+      `Unsafe biometric action requested: ${action}`
+    );
+  }
+
+  await db.query(
+    `
+      INSERT INTO biometric_sync_queue(
+        member_id,
+        action
+      )
+      SELECT $1, $2
+      WHERE NOT EXISTS (
+        SELECT 1
+        FROM biometric_sync_queue
+        WHERE member_id = $1
+          AND action = $2
+          AND status IN ('pending', 'processing')
+      )
+    `,
+    [memberId, action]
+  );
+};
+
+// ============================================================
+// AUDIT
+// ============================================================
+
+const audit = (
+  db,
+  userId,
+  action,
+  entityType,
+  entityId,
+  metadata = {}
+) =>
+  db.query(
+    `
+      INSERT INTO audit_logs(
+        admin_id,
+        action,
+        entity_type,
+        entity_id,
+        metadata
+      )
+      VALUES($1, $2, $3, $4, $5)
+    `,
+    [
+      userId,
+      action,
+      entityType,
+      entityId,
+      metadata,
+    ]
+  );
+
+// ============================================================
+// DASHBOARD
+// ============================================================
+
+router.get(
+  "/dashboard",
+  async (req, res, next) => {
+    try {
+      const { rows } = await query(`
+        SELECT
+          count(*) FILTER (
+            WHERE status = 'active'
+          )::int AS active_members,
+
+          count(*) FILTER (
+            WHERE status = 'expired'
+          )::int AS expired_members,
+
+          count(*) FILTER (
+            WHERE status = 'active'
+            AND EXISTS (
+              SELECT 1
+              FROM memberships ms
+              WHERE ms.member_id = members.id
+                AND ms.status = 'active'
+                AND ms.end_date BETWEEN
+                  current_date
+                  AND current_date + 7
+            )
+          )::int AS expiring_soon
+
+        FROM members
+        WHERE biometric_machine_member = TRUE
+      `);
+
+      const revenue = await query(`
+        SELECT
+          COALESCE(
+            SUM(amount),
+            0
+          ) AS monthly_revenue
+
+        FROM payments
+
+        WHERE status = 'completed'
+          AND paid_at >= date_trunc(
+            'month',
+            now()
+          )
+      `);
+
+      const attendance = await query(`
+        SELECT
+          COUNT(*)::int AS today_attendance
+
+        FROM attendance_events
+
+        WHERE punched_at::date =
+          current_date
+      `);
+
+      res.json({
+        success: true,
+        data: {
+          ...rows[0],
+          monthly_revenue:
+            revenue.rows[0].monthly_revenue,
+          today_attendance:
+            attendance.rows[0].today_attendance,
+        },
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+// ============================================================
+// MEMBERSHIP PLANS
+// ============================================================
+
+router.get(
+  "/plans",
+  async (req, res, next) => {
+    try {
+      const { rows } = await query(`
+        SELECT *
+        FROM membership_plans
+        ORDER BY price, name
+      `);
+
+      res.json({
+        success: true,
+        data: rows,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+router.post(
+  "/plans",
+  async (req, res, next) => {
+    try {
+      const {
+        name,
+        durationDays,
+        price,
+        description,
+      } = req.body;
+
+      if (
+        !name ||
+        !Number.isInteger(durationDays) ||
+        durationDays < 1 ||
+        Number(price) < 0
+      ) {
+        throw fail(
+          422,
+          "name, durationDays and a valid price are required"
+        );
+      }
+
+      const { rows } = await query(
+        `
+          INSERT INTO membership_plans(
+            name,
+            duration_days,
+            price,
+            description
+          )
+          VALUES($1, $2, $3, $4)
+          RETURNING *
+        `,
+        [
+          name.trim(),
+          durationDays,
+          price,
+          description || null,
+        ]
+      );
+
+      await audit(
+        { query },
+        req.user.id,
+        "plan.created",
+        "membership_plan",
+        rows[0].id
+      );
+
+      res.status(201).json({
+        success: true,
+        data: rows[0],
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+router.put(
+  "/plans/:id",
+  async (req, res, next) => {
+    try {
+      const {
+        name,
+        durationDays,
+        price,
+        description,
+        isActive,
+      } = req.body;
+
+      const { rows } = await query(
+        `
+          UPDATE membership_plans
+
+          SET
+            name = COALESCE(
+              $2,
+              name
+            ),
+
+            duration_days = COALESCE(
+              $3,
+              duration_days
+            ),
+
+            price = COALESCE(
+              $4,
+              price
+            ),
+
+            description = COALESCE(
+              $5,
+              description
+            ),
+
+            is_active = COALESCE(
+              $6,
+              is_active
+            )
+
+          WHERE id = $1
+
+          RETURNING *
+        `,
+        [
+          req.params.id,
+          name?.trim(),
+          durationDays,
+          price,
+          description,
+          isActive,
+        ]
+      );
+
+      if (!rows[0]) {
+        throw fail(
+          404,
+          "Plan not found"
+        );
+      }
+
+      res.json({
+        success: true,
+        data: rows[0],
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+// ============================================================
+// DIRECT BIOMETRIC MACHINE USERS
+// ============================================================
+
+router.get(
+  "/biometric/users",
+  async (req, res, next) => {
+    try {
+      const DEVICE_IP =
+        process.env.ZK_DEVICE_IP ||
+        "192.168.0.201";
+
+      const DEVICE_PORT = Number(
+        process.env.ZK_DEVICE_PORT ||
+        4370
+      );
+
+      const deviceResult =
+        await getDirectBiometricUsers();
+
+      const machineUsers =
+        Array.isArray(deviceResult)
+          ? deviceResult
+          : Array.isArray(
+              deviceResult?.users
+            )
+            ? deviceResult.users
+            : Array.isArray(
+                deviceResult?.data
+              )
+              ? deviceResult.data
+              : [];
+
+      const normalizeId = (value) => {
+        if (
+          typeof normalizeBiometricId ===
+          "function"
+        ) {
+          return normalizeBiometricId(
+            value
+          );
+        }
+
+        return String(value || "")
+          .trim()
+          .replace(/^0+(\d)/, "$1");
+      };
+
+      const normalizedMachineUsers =
+        machineUsers
+          .map((user) => {
+            const biometricId =
+              normalizeId(
+                user.biometric_user_id ??
+                  user.employee_code ??
+                  user.userid ??
+                  user.userId ??
+                  user.userID ??
+                  user.uid
+              );
+
+            const name = String(
+              user.full_name ??
+                user.name ??
+                user.username ??
+                ""
+            ).trim();
+
+            const cardNo =
+              user.card_no ??
+              user.cardno ??
+              user.cardNo ??
+              "";
+
+            return {
+              ...user,
+              biometric_user_id:
+                biometricId,
+              employee_code:
+                biometricId,
+              full_name:
+                name || null,
+              name:
+                name || null,
+              card_no:
+                cardNo || null,
+              machine_uid:
+                user.machine_uid ??
+                user.uid ??
+                null,
+            };
+          })
+          .filter(
+            (user) =>
+              user.biometric_user_id
+          );
+
+      const uniqueMachineUsers = [];
+      const machineIdSet = new Set();
+
+      for (
+        const user of normalizedMachineUsers
+      ) {
+        const id = normalizeId(
+          user.biometric_user_id
+        );
+
+        if (
+          !id ||
+          machineIdSet.has(id)
+        ) {
+          continue;
+        }
+
+        machineIdSet.add(id);
+        uniqueMachineUsers.push(user);
+      }
+
+      const {
+        rows: registeredMembers,
+      } = await query(`
+        SELECT
+          id,
+          member_code,
+          full_name,
+          biometric_user_id
+
+        FROM members
+
+        WHERE biometric_machine_member = TRUE
+          AND biometric_user_id IS NOT NULL
+          AND btrim(
+            biometric_user_id
+          ) <> ''
+      `);
+
+      const registeredIds = new Set(
+        registeredMembers
+          .map((member) =>
+            normalizeId(
+              member.biometric_user_id
+            )
+          )
+          .filter(Boolean)
+      );
+
+      const availableUsers =
+        uniqueMachineUsers
+          .filter((user) => {
+            const id = normalizeId(
+              user.biometric_user_id
+            );
+
+            return (
+              id &&
+              !registeredIds.has(id)
+            );
+          })
+          .sort((a, b) =>
+            String(
+              a.biometric_user_id
+            ).localeCompare(
+              String(
+                b.biometric_user_id
+              ),
+              undefined,
+              {
+                numeric: true,
+                sensitivity: "base",
+              }
+            )
+          );
+
+      return res.json({
+        success: true,
+        source:
+          "biometric_machine",
+
+        device: {
+          ip: DEVICE_IP,
+          port: DEVICE_PORT,
+        },
+
+        machineUserCount:
+          uniqueMachineUsers.length,
+
+        registeredUserCount:
+          registeredIds.size,
+
+        availableUserCount:
+          availableUsers.length,
+
+        data:
+          availableUsers,
+      });
+    } catch (error) {
+      console.error(
+        "DIRECT BIOMETRIC USER ERROR:",
+        error
+      );
+
+      return next(error);
+    }
+  }
+);
+
+// ============================================================
+// MEMBERS
+// ============================================================
+
+/*
+  IMPORTANT FIX:
+
+  Previously this endpoint only joined:
+
+      memberships WHERE status = 'active'
+
+  Therefore after a membership became expired,
+  start_date and end_date disappeared completely.
+
+  This version gets the latest membership for each member,
+  preferring the active membership when available.
+
+  Therefore expiry information remains visible even after refresh.
+*/
+
+router.get(
+  "/members",
+  async (req, res, next) => {
+    try {
+      const requestedLimit =
+        Number(req.query.limit);
+
+      const limit =
+        Number.isFinite(
+          requestedLimit
+        ) &&
+        requestedLimit > 0
+          ? Math.min(
+              requestedLimit,
+              1000
+            )
+          : 1000;
+
+      const search =
+        req.query.search?.trim() ||
+        "";
+
+      const { rows } = await query(
+        `
+          SELECT
+            m.*,
+
+            ms.id AS membership_id,
+            to_char(ms.start_date, 'YYYY-MM-DD') AS start_date,
+            to_char(ms.end_date, 'YYYY-MM-DD') AS end_date,
+            ms.status AS membership_status,
+
+            p.name AS plan_name,
+            p.duration_days AS plan_duration_days,
+
+            pay.amount AS final_amount,
+            pay.payment_method
+
+          FROM members m
+
+          LEFT JOIN LATERAL (
+            SELECT *
+            FROM memberships
+
+            WHERE member_id = m.id
+
+            ORDER BY
+              updated_at DESC,
+              created_at DESC,
+              start_date DESC
+
+            LIMIT 1
+          ) ms ON TRUE
+
+          LEFT JOIN membership_plans p
+            ON p.id = ms.plan_id
+
+          LEFT JOIN LATERAL (
+            SELECT
+              amount,
+              payment_method
+
+            FROM payments
+
+            WHERE payments.member_id =
+              m.id
+
+            ORDER BY
+              paid_at DESC
+
+            LIMIT 1
+          ) pay ON TRUE
+
+          WHERE
+            m.biometric_machine_member = TRUE
+
+            AND (
+              $1 = ''
+
+              OR m.full_name ILIKE
+                '%' || $1 || '%'
+
+              OR m.member_code ILIKE
+                '%' || $1 || '%'
+
+              OR m.phone ILIKE
+                '%' || $1 || '%'
+            )
+
+          ORDER BY
+            m.created_at DESC
+
+          LIMIT $2
+        `,
+        [search, limit]
+      );
+
+      res.json({
+        success: true,
+        data: rows,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+// ============================================================
+// GET SINGLE MEMBER
+// ============================================================
+
+router.get(
+  "/members/:id",
+  async (req, res, next) => {
+    try {
+      const { rows } = await query(
+        `
+          SELECT
+            m.*,
+
+            ms.id AS membership_id,
+            to_char(ms.start_date, 'YYYY-MM-DD') AS start_date,
+            to_char(ms.end_date, 'YYYY-MM-DD') AS end_date,
+            ms.status AS membership_status,
+
+            p.name AS plan_name,
+            p.duration_days AS plan_duration_days,
+
+            pay.amount AS final_amount,
+            pay.payment_method
+
+          FROM members m
+
+          LEFT JOIN LATERAL (
+            SELECT *
+            FROM memberships
+
+            WHERE member_id = m.id
+
+            ORDER BY
+              updated_at DESC,
+              created_at DESC,
+              start_date DESC
+
+            LIMIT 1
+          ) ms ON TRUE
+
+          LEFT JOIN membership_plans p
+            ON p.id = ms.plan_id
+
+          LEFT JOIN LATERAL (
+            SELECT
+              amount,
+              payment_method
+
+            FROM payments
+
+            WHERE payments.member_id =
+              m.id
+
+            ORDER BY
+              paid_at DESC
+
+            LIMIT 1
+          ) pay ON TRUE
+
+          WHERE
+            m.id = $1
+
+            AND
+            m.biometric_machine_member = TRUE
+        `,
+        [req.params.id]
+      );
+
+      if (!rows[0]) {
+        throw fail(
+          404,
+          "Member not found"
+        );
+      }
+
+      const memberships =
+        await query(
+          `
+            SELECT
+              ms.*,
+              p.name AS plan_name,
+              p.duration_days AS plan_duration_days
+
+            FROM memberships ms
+
+            JOIN membership_plans p
+              ON p.id = ms.plan_id
+
+            WHERE ms.member_id = $1
+
+            ORDER BY
+              ms.start_date DESC,
+              ms.created_at DESC
+          `,
+          [req.params.id]
+        );
+
+      res.json({
+        success: true,
+
+        data: {
+          ...rows[0],
+          memberships:
+            memberships.rows,
+        },
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+// ============================================================
+// CREATE NEW MEMBER
+// ============================================================
+
+router.post(
+  "/members/enroll",
+  async (req, res, next) => {
+    try {
+      const {
+        fullName,
+        phone,
+        email,
+        gender,
+        dateOfBirth,
+        address,
+        emergencyContactName,
+        emergencyContactPhone,
+        biometricUserId,
+        planId,
+        startDate,
+        expiryDate,
+        admissionFee,
+        discount,
+        amount,
+        paymentMethod,
+        transactionReference,
+        notes,
+      } = req.body;
+
+      if (!fullName?.trim()) {
+        throw fail(
+          422,
+          "Full name is required"
+        );
+      }
+
+      if (!planId) {
+        throw fail(
+          422,
+          "planId is required"
+        );
+      }
+
+      if (!paymentMethod) {
+        throw fail(
+          422,
+          "paymentMethod is required"
+        );
+      }
+
+      if (!biometricUserId) {
+        throw fail(
+          422,
+          "biometricUserId is required"
+        );
+      }
+
+      const normalizedBiometricUserId =
+        typeof normalizeBiometricId ===
+        "function"
+          ? normalizeBiometricId(
+              biometricUserId
+            )
+          : String(
+              biometricUserId
+            ).trim();
+
+      if (!normalizedBiometricUserId) {
+        throw fail(
+          422,
+          "A valid biometric user ID is required"
+        );
+      }
+
+      const data =
+        await transaction(
+          async (db) => {
+            const planResult =
+              await db.query(
+                `
+                  SELECT *
+                  FROM membership_plans
+
+                  WHERE id = $1
+                    AND is_active = TRUE
+
+                  FOR UPDATE
+                `,
+                [planId]
+              );
+
+            const plan =
+              planResult.rows[0];
+
+            if (!plan) {
+              throw fail(
+                404,
+                "Active plan not found"
+              );
+            }
+
+            const existingResult =
+              await db.query(
+                `
+                  SELECT
+                    m.*,
+                    EXISTS (
+                      SELECT 1
+                      FROM memberships ms
+                      WHERE ms.member_id = m.id
+                        AND ms.status = 'active'
+                    ) AS has_active_membership
+                  FROM members m
+
+                  WHERE biometric_user_id
+                    IS NOT NULL
+
+                    AND btrim(
+                      biometric_user_id
+                    ) <> ''
+
+                    AND regexp_replace(
+                      btrim(
+                        biometric_user_id
+                      ),
+                      '^0+(\\d)',
+                      '\\1'
+                    ) = $1
+
+                  FOR UPDATE
+                `,
+                [
+                  normalizedBiometricUserId,
+                ]
+              );
+
+            if (
+              existingResult.rows[0]
+            ) {
+              const existingMember =
+                existingResult.rows[0];
+
+              if (
+                existingMember.created_by_admin_id ||
+                existingMember.has_active_membership
+              ) {
+                throw fail(
+                  409,
+                  `Biometric user ${normalizedBiometricUserId} is already registered.`
+                );
+              }
+
+              const updatedMemberResult =
+                await db.query(
+                  `
+                    UPDATE members
+                    SET
+                      biometric_machine_member = TRUE,
+                      full_name = $2,
+                      phone = $3,
+                      email = $4,
+                      gender = $5,
+                      date_of_birth = $6,
+                      address = $7,
+                      emergency_contact_name = $8,
+                      emergency_contact_phone = $9,
+                      created_by_admin_id = $10,
+                      status = 'active',
+                      biometric_access_enabled = TRUE,
+                      updated_at = NOW()
+                    WHERE id = $1
+                    RETURNING *
+                  `,
+                  [
+                    existingMember.id,
+                    fullName.trim(),
+                    phone || null,
+                    email || null,
+                    gender || null,
+                    dateOfBirth || null,
+                    address || null,
+                    emergencyContactName || null,
+                    emergencyContactPhone || null,
+                    req.user.id,
+                  ]
+                );
+
+              existingResult.rows[0] =
+                updatedMemberResult.rows[0];
+            }
+
+            const start =
+              startDate ||
+              new Date()
+                .toISOString()
+                .slice(0, 10);
+
+            const explicitExpiry =
+              expiryDate || null;
+
+            if (explicitExpiry) {
+              validateMembershipDates(
+                start,
+                explicitExpiry
+              );
+            }
+
+            const safeAdmissionFee =
+              Number(admissionFee) ||
+              0;
+
+            const safeDiscount =
+              Math.max(
+                0,
+                Number(discount) || 0
+              );
+
+            const calculatedAmount =
+              Math.max(
+                0,
+                Number(plan.price) +
+                  safeAdmissionFee -
+                  safeDiscount
+              );
+
+            const finalAmount =
+              amount !== undefined &&
+              amount !== null &&
+              amount !== ""
+                ? Math.max(
+                    0,
+                    Number(amount) || 0
+                  )
+                : calculatedAmount;
+
+            const member = existingResult.rows[0] ||
+              (await db.query(
+                `
+                  INSERT INTO members(
+                    member_code,
+                    biometric_user_id,
+                    biometric_machine_member,
+                    full_name,
+                    phone,
+                    email,
+                    gender,
+                    date_of_birth,
+                    address,
+                    emergency_contact_name,
+                    emergency_contact_phone,
+                    created_by_admin_id,
+                    status,
+                    biometric_access_enabled
+                  )
+
+                  VALUES(
+                    $1,
+                    $2,
+                    TRUE,
+                    $3,
+                    $4,
+                    $5,
+                    $6,
+                    $7,
+                    $8,
+                    $9,
+                    $10,
+                    $11,
+                    'active',
+                    TRUE
+                  )
+
+                  RETURNING *
+                `,
+                [
+                  memberCode(),
+                  normalizedBiometricUserId,
+                  fullName.trim(),
+                  phone || null,
+                  email || null,
+                  gender || null,
+                  dateOfBirth || null,
+                  address || null,
+                  emergencyContactName ||
+                    null,
+                  emergencyContactPhone ||
+                    null,
+                  req.user.id,
+                ]
+              )).rows[0];
+
+            const membershipResult =
+              await db.query(
+                `
+                  INSERT INTO memberships(
+                    member_id,
+                    plan_id,
+                    start_date,
+                    end_date,
+                    status
+                  )
+
+                  VALUES(
+                    $1,
+                    $2,
+                    $3::date,
+
+                    COALESCE(
+                      $5::date,
+
+                      (
+                        $3::date +
+                        (
+                          (
+                            $4::int - 1
+                          ) *
+                          INTERVAL '1 day'
+                        )
+                      )::date
+                    ),
+
+                    'active'
+                  )
+
+                  RETURNING *
+                `,
+                [
+                  member.id,
+                  plan.id,
+                  start,
+                  Number(
+                    plan.duration_days
+                  ),
+                  explicitExpiry,
+                ]
+              );
+
+            const membership =
+              membershipResult.rows[0];
+
+            const paymentResult =
+              await db.query(
+                `
+                  INSERT INTO payments(
+                    member_id,
+                    membership_id,
+                    receipt_type,
+                    amount,
+                    base_amount,
+                    admission_fee,
+                    discount,
+                    payment_method,
+                    transaction_reference,
+                    notes,
+                    status
+                  )
+
+                  VALUES(
+                    $1,
+                    $2,
+                    'new_membership',
+                    $3,
+                    $4,
+                    $5,
+                    $6,
+                    $7,
+                    $8,
+                    $9,
+                    'completed'
+                  )
+
+                  RETURNING *
+                `,
+                [
+                  member.id,
+                  membership.id,
+                  finalAmount,
+                  Number(plan.price),
+                  safeAdmissionFee,
+                  safeDiscount,
+                  paymentMethod,
+                  transactionReference ||
+                    null,
+                  notes || null,
+                ]
+              );
+
+            const payment =
+              paymentResult.rows[0];
+
+            const receiptResult =
+              await db.query(
+                `
+                  INSERT INTO receipts(
+                    payment_id,
+                    receipt_number,
+                    receipt_type
+                  )
+
+                  VALUES(
+                    $1,
+                    $2,
+                    'new_membership'
+                  )
+
+                  RETURNING *
+                `,
+                [
+                  payment.id,
+                  receiptNumber(),
+                ]
+              );
+
+            const receipt =
+              receiptResult.rows[0];
+
+            await db.query(
+              `
+                UPDATE members
+
+                SET
+                  status = 'active',
+                  biometric_access_enabled = TRUE,
+                  biometric_machine_member = TRUE
+
+                WHERE id = $1
+              `,
+              [member.id]
+            );
+
+            await queueBiometricAccessChange(
+              db,
+              member.id,
+              "enable"
+            );
+
+            await audit(
+              db,
+              req.user.id,
+              "member.enrolled",
+              "member",
+              member.id,
+              {
+                membershipId:
+                  membership.id,
+
+                paymentId:
+                  payment.id,
+
+                biometricUserId:
+                  normalizedBiometricUserId,
+              }
+            );
+
+            return {
+              member,
+              membership,
+              payment,
+              receipt,
+            };
+          }
+        );
+
+      try {
+        data.receipt.pdfPath =
+          await generateReceiptPdf(
+            data.receipt.receipt_number
+          );
+      } catch (_) {
+        data.receipt.pdfPending =
+          true;
+      }
+
+      return res.status(201).json({
+        success: true,
+        data,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+// ============================================================
+// UPDATE MEMBER
+// ============================================================
+
+router.put(
+  "/members/:id",
+  async (req, res, next) => {
+    try {
+      const {
+        fullName,
+        phone,
+        email,
+        gender,
+        dateOfBirth,
+        address,
+        emergencyContactName,
+        emergencyContactPhone,
+        biometricUserId,
+        status,
+        updateMembership,
+        plan,
+        duration,
+        startDate,
+        expiryDate,
+        finalAmount,
+        paymentMethod,
+      } = req.body;
+
+      const normalizedGender = String(gender || "").trim().toLowerCase();
+      const savedGender = ["male", "female", "other"].includes(normalizedGender)
+        ? normalizedGender
+        : gender;
+      const normalizedStatus = String(status || "").trim().toLowerCase();
+      const savedStatus = ["active", "expired", "suspended", "inactive"].includes(
+        normalizedStatus
+      )
+        ? normalizedStatus
+        : null;
+      const normalizedPaymentMethod = String(paymentMethod || "")
+        .trim()
+        .toLowerCase()
+        .replace(/\s+/g, "_");
+
+      const savedMember = await transaction(async (client) => {
+        const memberResult = await client.query(
+          `
+            UPDATE members
+            SET
+              full_name = COALESCE(NULLIF($2, ''), full_name),
+              phone = COALESCE(NULLIF($3, ''), phone),
+              email = COALESCE(NULLIF($4, ''), email),
+              gender = COALESCE(NULLIF($5, ''), gender),
+              date_of_birth = COALESCE(NULLIF($6, '')::date, date_of_birth),
+              address = COALESCE(NULLIF($7, ''), address),
+              emergency_contact_name = COALESCE(NULLIF($8, ''), emergency_contact_name),
+              emergency_contact_phone = COALESCE(NULLIF($9, ''), emergency_contact_phone),
+              biometric_user_id = COALESCE(NULLIF($10, ''), biometric_user_id),
+              status = COALESCE(NULLIF($11, ''), status),
+              updated_at = NOW()
+            WHERE id = $1
+            RETURNING *
+          `,
+          [
+            req.params.id,
+            fullName,
+            phone,
+            email,
+            savedGender,
+            dateOfBirth,
+            address,
+            emergencyContactName,
+            emergencyContactPhone,
+            biometricUserId,
+            savedStatus,
+          ]
+        );
+
+        if (!memberResult.rows[0]) {
+          throw fail(404, "Member not found");
+        }
+
+        let membership = null;
+
+        if (updateMembership === true) {
+          const currentResult = await client.query(
+            `
+              SELECT *
+              FROM memberships
+              WHERE member_id = $1
+              ORDER BY updated_at DESC, created_at DESC, start_date DESC
+              LIMIT 1
+              FOR UPDATE
+            `,
+            [req.params.id]
+          );
+
+          const current = currentResult.rows[0];
+          if (!current) {
+            throw fail(404, "Membership record not found for this member");
+          }
+
+          let resolvedPlanId = current.plan_id;
+          if (plan) {
+            const planResult = await client.query(
+              `
+                SELECT id
+                FROM membership_plans
+                WHERE LOWER(name) = LOWER($1) AND is_active = TRUE
+                LIMIT 1
+              `,
+              [plan]
+            );
+            if (planResult.rows[0]) resolvedPlanId = planResult.rows[0].id;
+          }
+
+          const targetStartDate = String(startDate || current.start_date).slice(0, 10);
+          const targetExpiryDate = String(expiryDate || current.end_date).slice(0, 10);
+          validateMembershipDates(targetStartDate, targetExpiryDate);
+
+          const membershipResult = await client.query(
+            `
+              UPDATE memberships
+              SET
+                plan_id = $2,
+                start_date = $3::date,
+                end_date = $4::date,
+                status = CASE
+                  WHEN status = 'cancelled' THEN status
+                  WHEN $4::date < CURRENT_DATE THEN 'expired'
+                  ELSE 'active'
+                END,
+                updated_at = NOW()
+              WHERE id = $1
+              RETURNING id, plan_id, start_date, end_date, status, updated_at
+            `,
+            [current.id, resolvedPlanId, targetStartDate, targetExpiryDate]
+          );
+          membership = membershipResult.rows[0];
+        }
+
+        if (
+          updateMembership === true &&
+          (finalAmount !== undefined || paymentMethod)
+        ) {
+          const paymentResult = await client.query(
+            `
+              SELECT id, amount, payment_method
+              FROM payments
+              WHERE member_id = $1
+              ORDER BY paid_at DESC
+              LIMIT 1
+              FOR UPDATE
+            `,
+            [req.params.id]
+          );
+
+          if (paymentResult.rows[0]) {
+            await client.query(
+              `
+                UPDATE payments
+                SET
+                  amount = COALESCE($2, amount),
+                  payment_method = COALESCE(NULLIF($3, ''), payment_method)
+                WHERE id = $1
+              `,
+              [
+                paymentResult.rows[0].id,
+                finalAmount ?? paymentResult.rows[0].amount,
+                normalizedPaymentMethod || paymentResult.rows[0].payment_method,
+              ]
+            );
+          }
+        }
+
+        const responseResult = await client.query(
+          `
+            SELECT
+              m.*,
+              ms.id AS membership_id,
+              ms.plan_id,
+              ms.start_date,
+              ms.end_date,
+              ms.status AS membership_status,
+              p.name AS plan_name,
+              p.duration_days AS plan_duration_days,
+              pay.amount AS final_amount,
+              pay.payment_method
+            FROM members m
+            LEFT JOIN LATERAL (
+              SELECT *
+              FROM memberships
+              WHERE member_id = m.id
+              ORDER BY updated_at DESC, created_at DESC, start_date DESC
+              LIMIT 1
+            ) ms ON TRUE
+            LEFT JOIN membership_plans p ON p.id = ms.plan_id
+            LEFT JOIN LATERAL (
+              SELECT amount, payment_method
+              FROM payments
+              WHERE member_id = m.id
+              ORDER BY paid_at DESC
+              LIMIT 1
+            ) pay ON TRUE
+            WHERE m.id = $1
+          `,
+          [req.params.id]
+        );
+
+        const row = responseResult.rows[0];
+        return {
+          ...row,
+          membership_start_date: row.start_date || null,
+          membership_end_date: row.end_date || null,
+          membership_expiry_date: row.end_date || null,
+          expiry_date: row.end_date || null,
+          join_date: row.start_date || null,
+          membership,
+        };
+      });
+
+      res.json({
+        success: true,
+        message: "Member updated successfully",
+        data: savedMember,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+// ============================================================
+// RENEW MEMBERSHIP
+// ============================================================
+
+/*
+  IMPORTANT:
+
+  This endpoint now fully supports manually selected:
+
+    startDate
+    expiryDate
+
+  The expiry date sent by the frontend is stored exactly as selected.
+
+  It will NOT be recalculated when the page refreshes.
+*/
+
+router.post(
+  "/members/:id/renew",
+  async (req, res, next) => {
+    try {
+      const {
+        planId,
+        startDate,
+        expiryDate,
+        amount,
+        paymentMethod,
+        transactionReference,
+        notes,
+      } = req.body;
+
+      if (!planId) {
+        throw fail(
+          422,
+          "planId is required"
+        );
+      }
+
+      if (!paymentMethod) {
+        throw fail(
+          422,
+          "paymentMethod is required"
+        );
+      }
+
+      // ----------------------------------------------------
+      // RENEWAL DATE
+      // ----------------------------------------------------
+
+      const renewalStartDate =
+        startDate ||
+        new Date()
+          .toISOString()
+          .slice(0, 10);
+
+      if (
+        !isValidDateString(
+          renewalStartDate
+        )
+      ) {
+        throw fail(
+          422,
+          "Invalid renewal start date"
+        );
+      }
+
+      // Manual expiry is optional.
+      // If frontend sends it, that exact date is saved.
+      const manualExpiryDate =
+        expiryDate || null;
+
+      if (manualExpiryDate) {
+        validateMembershipDates(
+          renewalStartDate,
+          manualExpiryDate
+        );
+      }
+
+      const data =
+        await transaction(
+          async (db) => {
+            // ------------------------------------------------
+            // MEMBER
+            // ------------------------------------------------
+
+            const memberResult =
+              await db.query(
+                `
+                  SELECT *
+                  FROM members
+
+                  WHERE id = $1
+
+                  FOR UPDATE
+                `,
+                [req.params.id]
+              );
+
+            const member =
+              memberResult.rows[0];
+
+            if (!member) {
+              throw fail(
+                404,
+                "Member not found"
+              );
+            }
+
+            // ------------------------------------------------
+            // PLAN
+            // ------------------------------------------------
+
+            const planResult =
+              await db.query(
+                `
+                  SELECT *
+                  FROM membership_plans
+
+                  WHERE
+                    id = $1
+
+                    AND
+                    is_active = TRUE
+                `,
+                [planId]
+              );
+
+            const plan =
+              planResult.rows[0];
+
+            if (!plan) {
+              throw fail(
+                404,
+                "Active plan not found"
+              );
+            }
+
+            // ------------------------------------------------
+            // EXPIRE OLD ACTIVE MEMBERSHIP
+            // ------------------------------------------------
+
+            await db.query(
+              `
+                UPDATE memberships
+
+                SET status = 'expired'
+
+                WHERE member_id = $1
+                  AND status = 'active'
+              `,
+              [member.id]
+            );
+
+            // ------------------------------------------------
+            // CREATE NEW MEMBERSHIP
+            //
+            // Manual expiry date ALWAYS wins.
+            //
+            // If no manual expiry date is sent:
+            //
+            // expiry =
+            // start date +
+            // plan duration - 1 day
+            // ------------------------------------------------
+
+            const membershipResult =
+              await db.query(
+                `
+                  INSERT INTO memberships(
+                    member_id,
+                    plan_id,
+                    start_date,
+                    end_date,
+                    status
+                  )
+
+                  VALUES(
+                    $1,
+                    $2,
+                    $3::date,
+
+                    COALESCE(
+                      $5::date,
+
+                      (
+                        $3::date +
+                        (
+                          (
+                            $4::int - 1
+                          ) *
+                          INTERVAL '1 day'
+                        )
+                      )::date
+                    ),
+
+                    'active'
+                  )
+
+                  RETURNING *
+                `,
+                [
+                  member.id,
+                  plan.id,
+                  renewalStartDate,
+                  Number(
+                    plan.duration_days
+                  ),
+                  manualExpiryDate,
+                ]
+              );
+
+            const membership =
+              membershipResult.rows[0];
+
+            // ------------------------------------------------
+            // PAYMENT
+            // ------------------------------------------------
+
+            const finalAmount =
+              amount !== undefined &&
+              amount !== null &&
+              amount !== ""
+                ? Math.max(
+                    0,
+                    Number(amount) || 0
+                  )
+                : Number(plan.price);
+
+            const paymentResult =
+              await db.query(
+                `
+                  INSERT INTO payments(
+                    member_id,
+                    membership_id,
+                    receipt_type,
+                    amount,
+                    base_amount,
+                    admission_fee,
+                    discount,
+                    payment_method,
+                    transaction_reference,
+                    notes,
+                    status
+                  )
+
+                  VALUES(
+                    $1,
+                    $2,
+                    'renewal',
+                    $3,
+                    $4,
+                    $5,
+                    $6,
+                    $7,
+                    $8,
+                    $9,
+                    'completed'
+                  )
+
+                  RETURNING *
+                `,
+                [
+                  member.id,
+                  membership.id,
+                  finalAmount,
+                  finalAmount,
+                  0,
+                  0,
+                  paymentMethod,
+                  transactionReference ||
+                    null,
+                  notes || null,
+                ]
+              );
+
+            const payment =
+              paymentResult.rows[0];
+
+            // ------------------------------------------------
+            // RECEIPT
+            // ------------------------------------------------
+            //
+            // FIX: the SQL below has ONLY 2 placeholders
+            // ($1, $2) because receipt_type is a hardcoded
+            // literal ('renewal'). The old code passed a
+            // 3rd value ("renewal") in the params array,
+            // which caused:
+            //
+            //   bind message supplies 3 parameters,
+            //   but prepared statement "" requires 2
+            //
+            // Fixed by passing exactly 2 params.
+            // ------------------------------------------------
+
+            const receiptResult =
+              await db.query(
+                `
+                  INSERT INTO receipts(
+                    payment_id,
+                    receipt_number,
+                    receipt_type
+                  )
+
+                  VALUES(
+                    $1,
+                    $2,
+                    'renewal'
+                  )
+
+                  RETURNING *
+                `,
+                [
+                  payment.id,
+                  receiptNumber(),
+                ]
+              );
+
+            const receipt =
+              receiptResult.rows[0];
+
+            // ------------------------------------------------
+            // RE-ACTIVATE MEMBER
+            // ------------------------------------------------
+
+            const updatedMemberResult =
+              await db.query(
+                `
+                  UPDATE members
+
+                  SET
+                    status = 'active',
+
+                    biometric_access_enabled =
+                      TRUE,
+
+                    biometric_machine_member =
+                      TRUE
+
+                  WHERE id = $1
+
+                  RETURNING *
+                `,
+                [member.id]
+              );
+
+            const updatedMember =
+              updatedMemberResult.rows[0];
+
+            // ------------------------------------------------
+            // QUEUE BIOMETRIC ENABLE
+            // ------------------------------------------------
+
+            await queueBiometricAccessChange(
+              db,
+              member.id,
+              "enable"
+            );
+
+            // ------------------------------------------------
+            // AUDIT
+            // ------------------------------------------------
+
+            await audit(
+              db,
+              req.user.id,
+              "membership.renewed",
+              "membership",
+              membership.id,
+              {
+                memberId:
+                  member.id,
+
+                paymentId:
+                  payment.id,
+
+                startDate:
+                  membership.start_date,
+
+                expiryDate:
+                  membership.end_date,
+
+                manualStartDate:
+                  Boolean(startDate),
+
+                manualExpiryDate:
+                  Boolean(expiryDate),
+              }
+            );
+
+            return {
+              member:
+                updatedMember,
+
+              membership,
+
+              payment,
+
+              receipt,
+            };
+          }
+        );
+
+      try {
+        data.receipt.pdfPath =
+          await generateReceiptPdf(
+            data.receipt.receipt_number
+          );
+      } catch (_) {
+        data.receipt.pdfPending =
+          true;
+      }
+
+      return res.status(201).json({
+        success: true,
+        data,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+// ============================================================
+// PAYMENTS
+// ============================================================
+
+/*
+  FIX: this previously used
+
+      JOIN members m ON m.id = pay.member_id
+
+  which is an INNER join. Any payment row with member_id = NULL
+  (an "Other Income" entry that isn't linked to a registered
+  member — see payment.routes.js / payment.controller.js) would
+  be silently excluded from every response, even though the row
+  saved fine in the database. It would look exactly like the
+  entry "disappeared on refresh" when it was actually the read
+  query dropping it.
+
+  Switched to LEFT JOIN so unlinked payments still come back;
+  m.full_name / m.member_code are simply null for those rows,
+  which the frontend already treats as "not a registered member".
+*/
+
+router.get(
+  "/payments",
+  async (req, res, next) => {
+    try {
+      const { rows } = await query(`
+        SELECT
+          pay.*,
+
+          m.full_name,
+          m.member_code,
+
+          r.receipt_number,
+          r.receipt_type,
+          r.pdf_path
+
+        FROM payments pay
+
+        LEFT JOIN members m
+          ON m.id = pay.member_id
+
+        LEFT JOIN receipts r
+          ON r.payment_id = pay.id
+
+        ORDER BY
+          pay.paid_at DESC
+
+        LIMIT 200
+      `);
+
+      res.json({
+        success: true,
+        data: rows,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+// Billing reset is a saved cutoff, not a destructive deletion of payment history.
+router.get("/billing/reset", async (req, res, next) => {
+  try {
+    const { rows } = await query(`
+      SELECT created_at
+      FROM audit_logs
+      WHERE action = 'billing.reset'
+        AND entity_type = 'billing'
+      ORDER BY created_at DESC
+      LIMIT 1
+    `);
+    res.json({ success: true, data: { resetAt: rows[0]?.created_at || null } });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post("/billing/reset", async (req, res, next) => {
+  try {
+    const { rows } = await query(`
+      INSERT INTO audit_logs(admin_id, action, entity_type, metadata)
+      VALUES($1, 'billing.reset', 'billing', $2)
+      RETURNING created_at
+    `, [req.user.id, { reset: "current billing view" }]);
+    res.status(201).json({ success: true, data: { resetAt: rows[0].created_at } });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// ============================================================
+// RECEIPT
+// ============================================================
+
+router.get(
+  "/receipts/:receiptNumber",
+  async (req, res, next) => {
+    try {
+      const receipt =
+        await getReceipt(
+          req.params.receiptNumber
+        );
+
+      if (!receipt) {
+        throw fail(
+          404,
+          "Receipt not found"
+        );
+      }
+
+      res.json({
+        success: true,
+        data: receipt,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+router.post(
+  "/receipts/:receiptNumber/generate",
+  async (req, res, next) => {
+    try {
+      const path =
+        await generateReceiptPdf(
+          req.params.receiptNumber
+        );
+
+      res.json({
+        success: true,
+        data: {
+          path,
+        },
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+router.get(
+  "/receipts/:receiptNumber/download",
+  async (req, res, next) => {
+    try {
+      const url =
+        await receiptDownloadUrl(
+          req.params.receiptNumber
+        );
+
+      res.json({
+        success: true,
+        data: {
+          url,
+        },
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+// ============================================================
+// ATTENDANCE
+// ============================================================
+
+router.get(
+  "/attendance",
+  async (req, res, next) => {
+    try {
+      const date =
+        req.query.date;
+
+      const { rows } = date
+        ? await query(
+            `
+              SELECT
+                a.*,
+                m.full_name,
+                m.phone
+
+              FROM attendance_events a
+
+              LEFT JOIN members m
+                ON m.id = a.member_id
+
+              WHERE
+                a.punched_at::date =
+                  $1::date
+
+              ORDER BY
+                a.punched_at DESC
+            `,
+            [date]
+          )
+        : await query(`
+            SELECT
+              a.*,
+              m.full_name,
+              m.phone
+
+            FROM attendance_events a
+
+            LEFT JOIN members m
+              ON m.id = a.member_id
+
+            ORDER BY
+              a.punched_at DESC
+          `);
+
+      res.json({
+        success: true,
+        data: rows,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+// ============================================================
+// DELETE MEMBER
+// ============================================================
+
+router.delete(
+  "/members/:id",
+  async (req, res, next) => {
+    try {
+      const data =
+        await transaction(
+          async (db) => {
+            const memberResult =
+              await db.query(
+                `
+                  SELECT *
+                  FROM members
+
+                  WHERE id = $1
+
+                  FOR UPDATE
+                `,
+                [req.params.id]
+              );
+
+            if (
+              !memberResult.rows.length
+            ) {
+              throw fail(
+                404,
+                "Member not found"
+              );
+            }
+
+            const member =
+              memberResult.rows[0];
+
+            await db.query(
+              `
+                DELETE FROM biometric_sync_queue
+
+                WHERE member_id = $1
+              `,
+              [member.id]
+            );
+
+            await db.query(
+              `
+                UPDATE payments
+                SET
+                  member_id = NULL,
+                  membership_id = NULL
+                WHERE member_id = $1
+              `,
+              [member.id]
+            );
+
+            await db.query(
+              `
+                DELETE FROM memberships
+
+                WHERE member_id = $1
+              `,
+              [member.id]
+            );
+
+            await db.query(
+              `
+                DELETE FROM attendance_events
+
+                WHERE member_id = $1
+              `,
+              [member.id]
+            );
+
+            await db.query(
+              `
+                DELETE FROM members
+
+                WHERE id = $1
+              `,
+              [member.id]
+            );
+
+            await audit(
+              db,
+              req.user.id,
+              "member.deleted",
+              "member",
+              member.id
+            );
+
+            return {
+              id: member.id,
+            };
+          }
+        );
+
+      res.json({
+        success: true,
+
+        message:
+          "Member permanently deleted from Supabase. Biometric machine user was not deleted.",
+
+        data,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+// ============================================================
+// EXPORT
+// ============================================================
+
+module.exports = router;

@@ -47,7 +47,7 @@ function SideBar() {
 
   return (
     <div
-      className="bg-dark text-white d-flex flex-column justify-content-between shadow"
+      className="dashboard-sidebar bg-dark text-white d-flex flex-column justify-content-between shadow"
       style={{
         width: "280px",
         height: "100vh",

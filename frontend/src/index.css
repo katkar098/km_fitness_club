@@ -7,6 +7,123 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+  width: 100%;
+}
+
+img,
+svg,
+video,
+canvas {
+  max-width: 100%;
+}
+
+.navbar-logo {
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  object-fit: cover;
+}
+
+.dashboard-content {
+  margin-left: 280px;
+  min-height: 100vh;
+  padding: 20px;
+  background-color: #f8f9fa;
+  min-width: 0;
+}
+
+.dashboard-sidebar {
+  width: 280px;
+  height: 100vh;
+  position: fixed;
+  top: 0;
+  left: 0;
+  overflow-y: auto;
+  z-index: 1030;
+}
+
+/* Allow data tables to scroll instead of stretching the viewport. */
+.table-responsive {
+  max-width: 100%;
+}
+
+@media (max-width: 767.98px) {
+  .dashboard-sidebar {
+    position: relative !important;
+    width: 100% !important;
+    height: auto !important;
+    overflow: visible !important;
+  }
+
+  .dashboard-sidebar > div:first-child {
+    width: 100%;
+  }
+
+  .dashboard-sidebar .nav {
+    flex-direction: row !important;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .dashboard-sidebar .nav-item {
+    margin-bottom: 0 !important;
+  }
+
+  .dashboard-sidebar .nav-link {
+    padding: 8px 10px !important;
+    font-size: 0.9rem;
+  }
+
+  .dashboard-content {
+    margin-left: 0 !important;
+    padding: 16px 12px !important;
+  }
+
+  .navbar-brand {
+    font-size: 1rem;
+  }
+
+  .navbar-logo {
+    width: 36px;
+    height: 36px;
+    margin-right: 8px !important;
+  }
+}
+
+@media (max-width: 575.98px) {
+  .dashboard-content {
+    padding: 12px 8px !important;
+  }
+
+  .dashboard-content .display-1,
+  .dashboard-content .display-2,
+  .dashboard-content .display-3,
+  .dashboard-content .display-4 {
+    font-size: clamp(1.8rem, 8vw, 3rem);
+  }
+
+  .dashboard-content .card-body {
+    padding: 0.85rem;
+  }
+
+  input,
+  select,
+  textarea,
+  button {
+    max-width: 100%;
+  }
+}
+
 code {
   font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New',
     monospace;

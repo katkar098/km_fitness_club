@@ -6,7 +6,7 @@ function Home({ children }) {
     <div>
       <SideBar />
 
-      <div
+      <main className="dashboard-content"
         style={{
           marginLeft: "280px",
           minHeight: "100vh",
@@ -15,7 +15,7 @@ function Home({ children }) {
         }}
       >
         {children}
-      </div>
+      </main>
     </div>
   );
 }

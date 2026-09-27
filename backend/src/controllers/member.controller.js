@@ -82,6 +82,30 @@ async function getMemberById(req, res) {
   }
 }
 
+async function getUnregisteredBiometricUsers(req, res) {
+  try {
+    const result = await db.query(`
+      SELECT biometric_id, name, machine_user_id, member_id, sync_status
+      FROM biometric_users
+      WHERE sync_status = 'unregistered'
+        AND member_id IS NULL
+      ORDER BY name ASC NULLS LAST, biometric_id ASC
+    `);
+
+    return res.status(200).json({
+      success: true,
+      count: result.rows.length,
+      data: result.rows,
+    });
+  } catch (err) {
+    console.error("getUnregisteredBiometricUsers error:", err);
+    return res.status(500).json({
+      success: false,
+      message: "Unable to load unregistered biometric users.",
+    });
+  }
+}
+
 // ============================================================
 // CREATE NORMAL MEMBER
 // ============================================================
@@ -152,7 +176,7 @@ function duplicateMemberMessage(err) {
 // ============================================================
 
 async function enrollMember(req, res) {
-  const client = await db.connect();
+  const client = await db.getPool().connect();
 
   try {
     await client.query("BEGIN");
@@ -182,6 +206,10 @@ async function enrollMember(req, res) {
 
     if (!finalMemberCode) {
       throw new Error("Biometric Employee Code is required.");
+    }
+
+    if (!body.biometricUserId || !String(body.biometricUserId).trim()) {
+      throw new Error("Select an available biometric user.");
     }
 
     // Serialize enrollments for the same normalized biometric ID. The
@@ -324,6 +352,30 @@ async function enrollMember(req, res) {
       throw dbError;
     }
 
+    // Link the selected, already-existing biometric record in this
+    // transaction. The conditional update is the concurrency guard: a
+    // second enrollment cannot claim a row that has already been linked.
+    const biometricResult = await client.query(
+      `
+      UPDATE biometric_users
+      SET member_id = $1, sync_status = 'registered'
+      WHERE biometric_id::text = $2
+        AND sync_status = 'unregistered'
+        AND member_id IS NULL
+      RETURNING biometric_id, name, machine_user_id, member_id, sync_status
+      `,
+      [member.id, String(body.biometricUserId).trim()]
+    );
+
+    if (biometricResult.rows.length === 0) {
+      const error = new Error(
+        "The selected biometric user is no longer available for registration. It may already be registered."
+      );
+      error.status = 409;
+      throw error;
+    }
+    const biometricUser = biometricResult.rows[0];
+
     // ========================================================
     // CREATE MEMBERSHIP
     // ========================================================
@@ -456,6 +508,7 @@ async function enrollMember(req, res) {
       data: {
         member,
         membership,
+        biometricUser,
 
         memberCode: returnedMemberCode,
         employeeCode: returnedMemberCode,
@@ -496,11 +549,14 @@ async function enrollMember(req, res) {
       .toLowerCase();
     const isDuplicate = err.code === "23505" ||
       /duplicate entry|duplicate key|unique constraint|already exists/.test(errorText);
+    const isDatabaseError = Boolean(err.code);
     const message = isDuplicate
       ? duplicateMemberMessage(err)
-      : describeDbError(err);
+      : isDatabaseError
+        ? "Unable to create the member due to a database error. Please try again."
+        : (err.message || "Unable to create the member.");
 
-    return res.status(isDuplicate ? 409 : (err.status || 400)).json({
+    return res.status(isDuplicate ? 409 : (err.status || (isDatabaseError ? 500 : 400))).json({
       success: false,
       message,
     });
@@ -729,6 +785,7 @@ module.exports = {
   getAllMembers,
   searchMembers,
   getMemberById,
+  getUnregisteredBiometricUsers,
   createMember,
   enrollMember,
   updateMember,

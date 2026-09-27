@@ -13,7 +13,6 @@ function CreateUser() {
   const {
     addMember,
     selectBiometricUser,
-    selectedBiometricId,
     setRenewalData,
   } = useMember();
 
@@ -50,6 +49,9 @@ function CreateUser() {
 
   const [saving, setSaving] =
     useState(false);
+  const [biometricUsers, setBiometricUsers] = useState([]);
+  const [biometricUsersLoading, setBiometricUsersLoading] = useState(true);
+  const [biometricUsersError, setBiometricUsersError] = useState("");
 
   // ============================================================
   // FORM
@@ -160,18 +162,37 @@ function CreateUser() {
     };
   }, []);
 
-  // ============================================================
-  // SELECTED BIOMETRIC ID
-  // ============================================================
-
   useEffect(() => {
-    if (!selectedBiometricId) return;
+    let mounted = true;
 
-    setForm((previous) => ({
-      ...previous,
-      id: selectedBiometricId,
-    }));
-  }, [selectedBiometricId]);
+    const loadBiometricUsers = async () => {
+      try {
+        setBiometricUsersLoading(true);
+        setBiometricUsersError("");
+        const response = await api.get("/members/unregistered-biometric-users");
+        const rows = Array.isArray(response?.data?.data)
+          ? response.data.data
+          : [];
+        if (!mounted) return;
+        setBiometricUsers(rows);
+      } catch (error) {
+        console.error("Failed to load unregistered biometric users:", error);
+        if (mounted) {
+          setBiometricUsersError(
+            error.response?.data?.message ||
+              "Could not load unregistered biometric users. Please try again."
+          );
+        }
+      } finally {
+        if (mounted) setBiometricUsersLoading(false);
+      }
+    };
+
+    loadBiometricUsers();
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   // ============================================================
   // FORM CHANGE
@@ -294,9 +315,16 @@ function CreateUser() {
     }));
   };
 
-  const handleBiometricIdChange = (event) => {
+  const handleBiometricUserChange = (event) => {
     const id = event.target.value;
-    setForm((previous) => ({ ...previous, id }));
+    const selectedUser = biometricUsers.find(
+      (user) => String(user.biometric_id) === id
+    );
+    setForm((previous) => ({
+      ...previous,
+      id,
+      name: selectedUser?.name || "",
+    }));
     selectBiometricUser(id);
   };
 
@@ -907,17 +935,46 @@ function CreateUser() {
           <div className="card-body row g-3">
             <div className="col-md-4">
               <label className="form-label fw-bold">
-                Biometric ID / Employee Code
+                Select Biometric User
               </label>
-              <input
+              <select
                 name="id"
                 className="form-control"
                 value={form.id}
-                onChange={handleBiometricIdChange}
-              />
+                onChange={handleBiometricUserChange}
+                disabled={biometricUsersLoading || biometricUsers.length === 0}
+              >
+                <option value="">
+                  {biometricUsersLoading
+                    ? "Loading biometric users..."
+                    : biometricUsers.length
+                      ? "Select Biometric User"
+                      : "No unregistered biometric users available"}
+                </option>
+                {biometricUsers.map((user) => (
+                  <option key={String(user.biometric_id)} value={String(user.biometric_id)}>
+                    {user.name || "Unnamed user"} — Biometric ID: {user.biometric_id}
+                  </option>
+                ))}
+              </select>
               <small className="text-muted">
                 This Employee Code will be used as the Member ID everywhere.
               </small>
+              {biometricUsersError && (
+                <div className="text-danger small mt-1" role="alert">
+                  {biometricUsersError}
+                </div>
+              )}
+            </div>
+
+            <div className="col-md-4">
+              <label className="form-label fw-bold">Member Name</label>
+              <input
+                className="form-control"
+                value={form.name}
+                readOnly
+                placeholder="Select a biometric user"
+              />
             </div>
 
             {/* ================================================= */}
@@ -1365,6 +1422,7 @@ function CreateUser() {
           disabled={
             saving ||
             plansLoading ||
+            biometricUsersLoading ||
             !form.id.trim() ||
             !form.planId ||
             !form.startDate ||

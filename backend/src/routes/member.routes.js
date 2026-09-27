@@ -366,6 +366,13 @@ router.get(
   memberController.searchMembers
 );
 
+// Keep this static path before /:id so it is never treated as a member UUID.
+router.get(
+  "/unregistered-biometric-users",
+  auth,
+  memberController.getUnregisteredBiometricUsers
+);
+
 // ============================================================
 // ENROLL MEMBER
 // ============================================================

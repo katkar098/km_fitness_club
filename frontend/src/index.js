@@ -12,7 +12,6 @@ import MembershipPage from './landing_page/membership/MembershipPage';
 import Dashboard from "./dashboard/Dashboard";
 import CreateUser from "./dashboard/CreateUser";
 import Billing from "./dashboard/Billing";
-import Attendance from "./dashboard/Attendance";
 import Members from "./dashboard/Members";
 import MembershipPlan from "./dashboard/MembershipPlan";
 import RenewMembership from "./dashboard/RenewMembership";
@@ -37,7 +36,6 @@ root.render(
         <Route path="/membership" element={<MembershipPage />} />
         <Route element={<RequireAuth />}>
           <Route path="/dashboard" element={<Dashboard />} />
-          <Route path="/attendance" element={<Attendance />} />
           <Route path="/billing" element={<Billing />} />
           <Route path="/create" element={<CreateUser />} />
           <Route path="/member" element={<Members />} />

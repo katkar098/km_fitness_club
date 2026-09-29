@@ -695,42 +695,6 @@ async function getMemberPayments(req, res) {
 }
 
 // ============================================================
-// MEMBER ATTENDANCE
-// ============================================================
-
-async function getMemberAttendance(req, res) {
-  try {
-    const result = await db.query(
-      `
-      SELECT *
-      FROM attendance
-      WHERE member_id = $1
-         OR member_code = (
-              SELECT member_code
-              FROM members
-              WHERE id = $1
-            )
-      ORDER BY punched_at DESC
-      `,
-      [req.params.id]
-    );
-
-    return res.json({
-      success: true,
-      count: result.rows.length,
-      data: result.rows,
-    });
-  } catch (err) {
-    console.error("getMemberAttendance error:", err);
-
-    return res.status(500).json({
-      success: false,
-      message: err.message,
-    });
-  }
-}
-
-// ============================================================
 // PHOTO
 // ============================================================
 
@@ -792,6 +756,5 @@ module.exports = {
   deleteMember,
   getMemberMemberships,
   getMemberPayments,
-  getMemberAttendance,
   uploadPhoto,
 };

@@ -198,24 +198,12 @@ router.get(
           )
       `);
 
-      const attendance = await query(`
-        SELECT
-          COUNT(*)::int AS today_attendance
-
-        FROM attendance_events
-
-        WHERE punched_at::date =
-          current_date
-      `);
-
       res.json({
         success: true,
         data: {
           ...rows[0],
           monthly_revenue:
             revenue.rows[0].monthly_revenue,
-          today_attendance:
-            attendance.rows[0].today_attendance,
         },
       });
     } catch (error) {
@@ -2093,64 +2081,6 @@ router.get(
 );
 
 // ============================================================
-// ATTENDANCE
-// ============================================================
-
-router.get(
-  "/attendance",
-  async (req, res, next) => {
-    try {
-      const date =
-        req.query.date;
-
-      const { rows } = date
-        ? await query(
-            `
-              SELECT
-                a.*,
-                m.full_name,
-                m.phone
-
-              FROM attendance_events a
-
-              LEFT JOIN members m
-                ON m.id = a.member_id
-
-              WHERE
-                a.punched_at::date =
-                  $1::date
-
-              ORDER BY
-                a.punched_at DESC
-            `,
-            [date]
-          )
-        : await query(`
-            SELECT
-              a.*,
-              m.full_name,
-              m.phone
-
-            FROM attendance_events a
-
-            LEFT JOIN members m
-              ON m.id = a.member_id
-
-            ORDER BY
-              a.punched_at DESC
-          `);
-
-      res.json({
-        success: true,
-        data: rows,
-      });
-    } catch (error) {
-      next(error);
-    }
-  }
-);
-
-// ============================================================
 // DELETE MEMBER
 // ============================================================
 
@@ -2209,15 +2139,6 @@ router.delete(
             await db.query(
               `
                 DELETE FROM memberships
-
-                WHERE member_id = $1
-              `,
-              [member.id]
-            );
-
-            await db.query(
-              `
-                DELETE FROM attendance_events
 
                 WHERE member_id = $1
               `,

@@ -33,40 +33,6 @@ VALUES
     ('MF000009', 'Tom Wilson', '+919876543218', 'tom.wilson@example.com', 'male', '1987-04-30', '369 Spruce Road, Jaipur', 'Annual Basic', CURRENT_DATE - INTERVAL '6 months', CURRENT_DATE + INTERVAL '6 months', 'Active'),
     ('MF000010', 'Lisa Anderson', '+919876543219', 'lisa.anderson@example.com', 'female', '1994-08-22', '741 Elm Street, Lucknow', 'Standard 6 Months', CURRENT_DATE - INTERVAL '3 months', CURRENT_DATE + INTERVAL '3 months', 'Active');
 
--- Seed attendance records for today
-INSERT INTO public.attendance (member_id, check_in, check_out, device_name, verification_method, synced)
-SELECT 
-    m.id,
-    CURRENT_DATE + TIME '08:00:00' + (random() * INTERVAL '2 hours'),
-    CURRENT_DATE + TIME '10:00:00' + (random() * INTERVAL '3 hours'),
-    'Main Gate Device',
-    'manual',
-    true
-FROM public.members m
-WHERE m.id IN (SELECT id FROM public.members ORDER BY random() LIMIT 6);
-
--- Seed attendance records for past days
-INSERT INTO public.attendance (member_id, check_in, check_out, device_name, verification_method, synced)
-SELECT 
-    m.id,
-    (CURRENT_DATE - INTERVAL '1 day') + TIME '09:00:00' + (random() * INTERVAL '1 hour'),
-    (CURRENT_DATE - INTERVAL '1 day') + TIME '11:00:00' + (random() * INTERVAL '2 hours'),
-    'Main Gate Device',
-    CASE WHEN random() > 0.5 THEN 'biometric' ELSE 'manual' END,
-    true
-FROM public.members m
-WHERE m.id IN (SELECT id FROM public.members ORDER BY random() LIMIT 5)
-UNION ALL
-SELECT 
-    m.id,
-    (CURRENT_DATE - INTERVAL '2 days') + TIME '08:30:00' + (random() * INTERVAL '1.5 hours'),
-    (CURRENT_DATE - INTERVAL '2 days') + TIME '10:30:00' + (random() * INTERVAL '2.5 hours'),
-    'Main Gate Device',
-    CASE WHEN random() > 0.5 THEN 'biometric' ELSE 'manual' END,
-    true
-FROM public.members m
-WHERE m.id IN (SELECT id FROM public.members ORDER BY random() LIMIT 4);
-
 -- Seed payments
 INSERT INTO public.payments (member_id, plan_id, amount, payment_method, transaction_id, status, receipt_number)
 SELECT 

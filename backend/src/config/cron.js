@@ -1,7 +1,6 @@
 const cron = require('node-cron');
 const logger = require('../utils/logger');
 const { expireMembershipJob } = require('../jobs/expireMembership.job');
-const { attendanceSyncJob } = require('../jobs/attendanceSync.job');
 const { biometricSyncJob } = require('../jobs/biometricSync.job');
 
 // Initialize all cron jobs
@@ -15,17 +14,6 @@ const initCronJobs = () => {
         logger.info('Membership expiration job completed successfully');
       } catch (error) {
         logger.error('Membership expiration job failed:', error);
-      }
-    });
-
-    // Run every hour to sync attendance
-    cron.schedule('0 * * * *', async () => {
-      logger.info('Running attendance sync job...');
-      try {
-        await attendanceSyncJob();
-        logger.info('Attendance sync job completed successfully');
-      } catch (error) {
-        logger.error('Attendance sync job failed:', error);
       }
     });
 

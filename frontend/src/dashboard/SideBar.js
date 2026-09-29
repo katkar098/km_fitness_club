@@ -19,11 +19,6 @@ function SideBar() {
       icon: "fa-home",
     },
     {
-      name: "Attendance",
-      path: "/attendance",
-      icon: "fa-calendar-check-o",
-    },
-    {
       name: "Billing",
       path: "/billing",
       icon: "fa-credit-card",

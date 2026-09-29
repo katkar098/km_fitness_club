@@ -12,9 +12,7 @@ const biometricEndpoints = {
   verifyFingerprint: '/api/verify/fingerprint',
   verifyFace: '/api/verify/face',
   enrollFingerprint: '/api/enroll/fingerprint',
-  enrollFace: '/api/enroll/face',
-  getAttendance: '/api/attendance',
-  syncAttendance: '/api/attendance/sync'
+  enrollFace: '/api/enroll/face'
 };
 
 // Mock biometric verification (to be replaced with actual SDK)

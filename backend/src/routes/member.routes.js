@@ -507,24 +507,6 @@ router.get(
 );
 
 // ============================================================
-// MEMBER ATTENDANCE
-// ============================================================
-
-router.get(
-  "/:id/attendance",
-  auth,
-  [
-    param("id")
-      .isUUID()
-      .withMessage(
-        "Invalid member ID"
-      ),
-  ],
-  validate,
-  memberController.getMemberAttendance
-);
-
-// ============================================================
 // EXPORT
 // ============================================================
 

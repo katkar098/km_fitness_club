@@ -332,12 +332,7 @@ export function MemberProvider({ children }) {
   const [transactions, setTransactions] = useState([]);
   const [paymentHistory, setPaymentHistory] = useState([]);
   const [selectedBiometricId, setSelectedBiometricId] = useState("");
-  const [attendanceHistory, setAttendanceHistory] = useState([]);
   const [renewalData, setRenewalData] = useState(null);
-
-  const addAttendance = (attendance) => {
-    setAttendanceHistory((prev) => [...prev, attendance]);
-  };
 
   // ------------------------------------------------------------
   // LOAD BACKEND DATA
@@ -348,10 +343,9 @@ export function MemberProvider({ children }) {
 
     const loadBackendData = async () => {
       try {
-        const [membersRes, paymentsRes, attendanceRes] = await Promise.all([
+        const [membersRes, paymentsRes] = await Promise.all([
           api.get("/members?limit=1000"),
           api.get("/payments?limit=1000"),
-          api.get("/attendance?limit=1000"),
         ]);
 
         const backendMembers = Array.isArray(membersRes?.data?.data)
@@ -362,63 +356,13 @@ export function MemberProvider({ children }) {
           ? paymentsRes.data.data
           : [];
 
-        const backendAttendance = Array.isArray(attendanceRes?.data?.data)
-          ? attendanceRes.data.data
-          : [];
-
-        console.log(
-          `Loaded ${backendMembers.length} members, ` +
-            `${backendPayments.length} payments, ` +
-            `${backendAttendance.length} attendance rows`
-        );
-
         const normalizedMembers = backendMembers.map(normalizeMember);
         setMembers(normalizedMembers);
 
         setTransactions(backendPayments.map(normalizeTransaction));
         setPaymentHistory(backendPayments.map(normalizePaymentHistory));
 
-        setAttendanceHistory(
-          backendAttendance.map((row) => {
-            const punchedAt = row.punched_at || row.date || "";
 
-            const timeMatch = String(punchedAt).match(
-              /(?:T|\s)(\d{1,2}):(\d{2})(?::\d{2})?/
-            );
-
-            let checkIn = "-";
-
-            if (timeMatch) {
-              let hour = Number(timeMatch[1]);
-              const minute = timeMatch[2];
-              const period = hour >= 12 ? "pm" : "am";
-              hour = hour % 12 || 12;
-              checkIn = `${hour}:${minute} ${period}`;
-            }
-
-            return {
-              memberId: String(
-                row.member_code ||
-                  row.employee_code ||
-                  row.member_id ||
-                  row.memberId ||
-                  ""
-              ),
-              member_code: String(
-                row.member_code || row.employee_code || row.member_id || ""
-              ),
-              employee_code: String(
-                row.employee_code || row.member_code || ""
-              ),
-              member_id: String(
-                row.member_id || row.memberId || row.member_code || ""
-              ),
-              date: formatDate(punchedAt),
-              checkIn,
-              rawPunchedAt: punchedAt,
-            };
-          })
-        );
       } catch (error) {
         console.error("Failed to load backend data:", error);
       }
@@ -828,10 +772,6 @@ export function MemberProvider({ children }) {
         addTransaction,
         addOtherIncome,
         markTransactionPaid,
-
-        attendanceHistory,
-        setAttendanceHistory,
-        addAttendance,
 
         renewMembership,
         renewalData,

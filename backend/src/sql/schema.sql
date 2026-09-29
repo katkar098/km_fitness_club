@@ -42,7 +42,6 @@ create table if not exists public.members (
   status text not null default 'active' check (status in ('active','expired','suspended','inactive')),
   biometric_access_enabled boolean not null default false,
   -- A member record is created only when an administrator completes Create User.
-  -- Attendance imports deliberately do not write to this table.
   created_by_admin_id uuid,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
@@ -98,19 +97,6 @@ create table if not exists public.receipts (
   created_at timestamptz not null default now()
 );
 
-create table if not exists public.attendance_events (
-  id uuid primary key default gen_random_uuid(),
-  device_id text not null,
-  source_record_id text not null,
-  member_code text not null,
-  member_id uuid references public.members(id) on delete set null,
-  punched_at timestamptz not null,
-  punch_type text,
-  raw_payload jsonb,
-  created_at timestamptz not null default now(),
-  unique(device_id, source_record_id)
-);
-
 create table if not exists public.biometric_sync_queue (
   id uuid primary key default gen_random_uuid(),
   member_id uuid not null references public.members(id) on delete restrict,
@@ -136,7 +122,6 @@ create table if not exists public.audit_logs (
 create index if not exists members_status_idx on public.members(status);
 create index if not exists members_code_idx on public.members(member_code);
 create index if not exists memberships_end_date_idx on public.memberships(end_date);
-create index if not exists attendance_member_time_idx on public.attendance_events(member_id, punched_at desc);
 create index if not exists biometric_queue_pending_idx on public.biometric_sync_queue(status, created_at);
 
 create or replace function public.set_updated_at()
@@ -160,6 +145,5 @@ alter table public.members enable row level security;
 alter table public.memberships enable row level security;
 alter table public.payments enable row level security;
 alter table public.receipts enable row level security;
-alter table public.attendance_events enable row level security;
 alter table public.biometric_sync_queue enable row level security;
 alter table public.audit_logs enable row level security;

@@ -66,6 +66,7 @@ function CreateUser() {
     dob: "",
     emergency: "",
     address: "",
+    planCategory: "",
     planId: "",
 
     // ==========================================================
@@ -133,9 +134,8 @@ function CreateUser() {
       setPlans(activePlans);
       setForm((previous) => ({
         ...previous,
-        planId: activePlans.some((plan) => String(plan.id) === String(previous.planId))
-          ? previous.planId
-          : activePlans[0]?.id || "",
+        planCategory: "",
+        planId: "",
       }));
     } catch (error) {
       console.error("Failed to load membership plans:", error);
@@ -231,6 +231,35 @@ function CreateUser() {
       String(form.planId)
   );
 
+  const getPlanCategory = (name) => {
+    const normalizedName = String(name || "").toLowerCase();
+    if (normalizedName.includes("personal") || normalizedName.includes("trainer")) {
+      return "Personal Training";
+    }
+    if (normalizedName.includes("cardio")) {
+      return "Gym + Cardio";
+    }
+    if (normalizedName.includes("gym")) {
+      return "Gym Membership";
+    }
+    return "";
+  };
+
+  const planCategories = ["Gym Membership", "Gym + Cardio", "Personal Training"]
+    .filter((category) => plans.some((plan) => getPlanCategory(plan.name) === category));
+
+  const durationPlans = plans
+    .filter((plan) => getPlanCategory(plan.name) === form.planCategory)
+    .sort((a, b) => Number(a.duration_days) - Number(b.duration_days));
+
+  const sortedBiometricUsers = [...biometricUsers].sort((a, b) =>
+    String(a.biometric_id ?? "").localeCompare(
+      String(b.biometric_id ?? ""),
+      undefined,
+      { numeric: true, sensitivity: "base" }
+    )
+  );
+
   // ============================================================
   // AMOUNTS
   // ============================================================
@@ -285,11 +314,19 @@ function CreateUser() {
   // PLAN NAME CHANGE
   // ============================================================
 
-  const handlePlanChange = (event) => {
-    const planId = event.target.value;
+  const handlePlanCategoryChange = (event) => {
+    const planCategory = event.target.value;
     setForm((previous) => ({
       ...previous,
-      planId,
+      planCategory,
+      planId: "",
+    }));
+  };
+
+  const handleDurationChange = (event) => {
+    setForm((previous) => ({
+      ...previous,
+      planId: event.target.value,
     }));
   };
 
@@ -941,7 +978,7 @@ function CreateUser() {
                       ? "Select Biometric User"
                       : "No unregistered biometric users available"}
                 </option>
-                {biometricUsers.map((user) => (
+                {sortedBiometricUsers.map((user) => (
                   <option key={String(user.biometric_id)} value={String(user.biometric_id)}>
                     {user.name || "Unnamed user"} — Biometric ID: {user.biometric_id}
                   </option>
@@ -1171,8 +1208,8 @@ function CreateUser() {
 
               <select
                 className="form-select"
-                value={form.planId}
-                onChange={handlePlanChange}
+                value={form.planCategory}
+                onChange={handlePlanCategoryChange}
                 disabled={
                   plansLoading ||
                   Boolean(plansError) ||
@@ -1186,11 +1223,11 @@ function CreateUser() {
                       ? "Plans could not be loaded"
                       : plans.length === 0
                         ? "No active plans configured"
-                        : "Select a membership plan"}
+                        : "Select a membership type"}
                 </option>
-                {plans.map((plan) => (
-                  <option key={plan.id} value={plan.id}>
-                    {plan.name} - {getDurationLabel(plan.duration_days)} - ₹{Number(plan.price).toLocaleString("en-IN")}
+                {planCategories.map((category) => (
+                  <option key={category} value={category}>
+                    {category}
                   </option>
                 ))}
               </select>
@@ -1220,18 +1257,24 @@ function CreateUser() {
                 Duration
               </label>
 
-              <input
-                className="form-control"
-                value={selectedPlan ? getDurationLabel(selectedPlan.duration_days) : ""}
-                placeholder={plansLoading ? "Loading..." : "Select a plan first"}
-                readOnly
-                disabled={!selectedPlan}
-              />
+              <select
+                className="form-select"
+                value={selectedPlan ? String(selectedPlan.id) : ""}
+                onChange={handleDurationChange}
+                disabled={!form.planCategory || durationPlans.length === 0}
+              >
+                <option value="">
+                  {form.planCategory ? "Select a duration" : "Select a membership type first"}
+                </option>
+                {durationPlans.map((plan) => (
+                  <option key={plan.id} value={plan.id}>
+                    {getDurationLabel(plan.duration_days)}
+                  </option>
+                ))}
+              </select>
 
               <small className="text-muted">
-                Duration is informational only, for pricing.
-                The manually selected expiry date above is
-                always what gets saved.
+                Choose a duration to load its matching membership amount.
               </small>
 
             </div>

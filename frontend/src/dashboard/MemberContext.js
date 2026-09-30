@@ -218,6 +218,10 @@ const normalizeMember = (row) => {
 const getDisplayType = (row) => {
   const receiptType = String(row.receipt_type || row.type || "").toLowerCase();
 
+  // The current payments table has no receipt_type column. Other Income
+  // rows are identified by the existing notes payload instead.
+  if (readBillingIncomeDetails(row)) return "Other Income";
+
   if (receiptType === "renewal") return "Renewal";
   if (receiptType === "other_income" || receiptType === "other income") {
     return "Other Income";
@@ -288,7 +292,7 @@ const normalizeTransaction = (row) => {
   createdAt: row.created_at || null,
   paymentDate: formatDate(row.paid_at || row.created_at || row.date),
   paidAt: row.paid_at || row.created_at || row.date || null,
-  ledgerCode: String(row.transaction_reference || row.ledger_code || ""),
+  ledgerCode: String(row.ledger_code || ""),
 
   status: row.status || "Paid",
 

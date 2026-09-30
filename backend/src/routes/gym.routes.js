@@ -1252,7 +1252,6 @@ router.post(
         baseAmount,
         discount,
         paymentMethod,
-        transactionReference,
         notes,
       } = req.body;
 
@@ -1398,7 +1397,8 @@ router.post(
                     plan_id,
                     start_date,
                     end_date,
-                    status
+                    status,
+                    amount
                   )
 
                   VALUES(
@@ -1420,7 +1420,8 @@ router.post(
                       )::date
                     ),
 
-                    'active'
+                    'active',
+                    $6
                   )
 
                   RETURNING *
@@ -1433,6 +1434,7 @@ router.post(
                     plan.duration_days
                   ),
                   manualExpiryDate,
+                  Number(plan.price),
                 ]
               );
 
@@ -1459,13 +1461,11 @@ router.post(
                   INSERT INTO payments(
                     member_id,
                     membership_id,
-                    receipt_type,
                     amount,
                     base_amount,
                     admission_fee,
                     discount,
                     payment_method,
-                    transaction_reference,
                     notes,
                     status
                   )
@@ -1473,14 +1473,12 @@ router.post(
                   VALUES(
                     $1,
                     $2,
-                    'renewal',
                     $3,
                     $4,
                     $5,
                     $6,
                     $7,
                     $8,
-                    $9,
                     'completed'
                   )
 
@@ -1494,8 +1492,6 @@ router.post(
                   0,
                   Number(discount || 0),
                   paymentMethod,
-                  transactionReference ||
-                    null,
                   notes || null,
                 ]
               );
@@ -1514,12 +1510,7 @@ router.post(
 
                   SET
                     status = 'active',
-
-                    biometric_access_enabled =
-                      TRUE,
-
-                    biometric_machine_member =
-                      TRUE
+                    updated_at = NOW()
 
                   WHERE id = $1
 
@@ -1532,25 +1523,16 @@ router.post(
               updatedMemberResult.rows[0];
 
             // ------------------------------------------------
-            // QUEUE BIOMETRIC ENABLE
-            // ------------------------------------------------
-
-            await queueBiometricAccessChange(
-              db,
-              member.id,
-              "enable"
-            );
-
+            // Read the existing biometric mapping status using the
+            // current member_id relationship. The current database has
+            // no biometric_sync_queue table.
             const syncResult = await db.query(
               `
                 SELECT
-                  action,
-                  status,
-                  last_error,
-                  processed_at
-                FROM biometric_sync_queue
+                  sync_status
+                FROM biometric_users
                 WHERE member_id = $1
-                ORDER BY created_at DESC
+                ORDER BY biometric_id
                 LIMIT 1
               `,
               [member.id]
@@ -1558,14 +1540,8 @@ router.post(
 
             const sync = syncResult.rows[0];
             Object.assign(updatedMember, {
-              biometric_sync_action:
-                sync?.action || null,
               biometric_sync_status:
-                sync?.status || null,
-              biometric_sync_error:
-                sync?.last_error || null,
-              biometric_sync_processed_at:
-                sync?.processed_at || null,
+                sync?.sync_status || null,
             });
 
             // ------------------------------------------------

@@ -101,7 +101,6 @@ exports.createPayment = async (req, res, next) => {
       paymentMethod,
       paymentStatus,
       receiptType,
-      transactionId,
       description,
       name,
     } = req.body;
@@ -114,33 +113,25 @@ exports.createPayment = async (req, res, next) => {
     const notes = resolvedReceiptType === "other_income"
       ? `KM_BILLING_INCOME_V1:${JSON.stringify({ name: paymentName, description: paymentDescription })}`
       : paymentDescription || null;
-    // Preserve a supplied external payment reference (such as a UPI
-    // reference), but do not invent an internal receipt-like identifier.
-    const resolvedTransactionId = transactionId || null;
-
     const data = await transaction(async (db) => {
       const paymentResult = await db.query(
         `
           INSERT INTO payments(
             member_id,
             membership_id,
-            receipt_type,
             amount,
             payment_method,
-            transaction_reference,
             notes,
             status
           )
-          VALUES($1, $2, $3, $4, $5, $6, $7, $8)
+          VALUES($1, $2, $3, $4, $5, $6)
           RETURNING *
         `,
         [
           memberId || null,
           membershipId || null,
-          resolvedReceiptType,
           Number(amount),
           paymentMethod,
-          resolvedTransactionId,
           notes,
           paymentStatus || "completed",
         ]
@@ -174,14 +165,13 @@ exports.createPayment = async (req, res, next) => {
 
 exports.updatePayment = async (req, res, next) => {
   try {
-    const { paymentStatus, transactionId } = req.body;
+    const { paymentStatus } = req.body;
 
     const { rows } = await query(
       `
         UPDATE payments
         SET
           status = COALESCE($2, status),
-          transaction_reference = COALESCE($3, transaction_reference),
           paid_at = CASE
             WHEN $2 = 'completed' AND status <> 'completed' THEN now()
             ELSE paid_at
@@ -189,7 +179,7 @@ exports.updatePayment = async (req, res, next) => {
         WHERE id = $1
         RETURNING *
       `,
-      [req.params.id, paymentStatus || null, transactionId || null]
+      [req.params.id, paymentStatus || null]
     );
 
     if (!rows[0]) {

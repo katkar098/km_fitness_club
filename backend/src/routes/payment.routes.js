@@ -54,16 +54,5 @@ router.get('/member/:memberId', auth, [
   param('memberId').isUUID().withMessage('Invalid member ID')
 ], validate, paymentController.getMemberPayments);
 
-router.get('/receipt/:receiptNumber', auth, [
-  param('receiptNumber').isString().withMessage('Valid receipt number is required')
-], validate, paymentController.getPaymentByReceipt);
-
-router.post('/:id/receipt', auth, admin, [
-  param('id').isUUID().withMessage('Invalid payment ID')
-], validate, paymentController.generateReceipt);
-
-router.get('/:id/receipt/download', auth, [
-  param('id').isUUID().withMessage('Invalid payment ID')
-], validate, paymentController.downloadReceipt);
 
 module.exports = router;

@@ -9,16 +9,3 @@ ALTER TABLE public.payments
 ALTER TABLE public.payments
   ADD CONSTRAINT payments_receipt_type_check
   CHECK (receipt_type IN ('new_membership', 'renewal', 'other_income'));
-
-ALTER TABLE public.receipts
-  DROP CONSTRAINT IF EXISTS receipts_receipt_type_check;
-ALTER TABLE public.receipts
-  ADD CONSTRAINT receipts_receipt_type_check
-  CHECK (receipt_type IN ('new_membership', 'renewal', 'other_income'));
-
--- Give older unlinked other-income entries stable ledger references too.
-UPDATE public.payments
-SET transaction_reference = 'KM' || upper(substr(replace(gen_random_uuid()::text, '-', ''), 1, 6))
-WHERE receipt_type = 'other_income'
-  AND member_id IS NULL
-  AND transaction_reference IS NULL;

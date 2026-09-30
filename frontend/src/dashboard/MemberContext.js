@@ -227,7 +227,7 @@ const getDisplayType = (row) => {
     receiptType === "new_membership" ||
     receiptType === "membership_payment"
   ) {
-    return "Membership";
+    return "New Admission";
   }
 
   return row.type || "Membership";
@@ -284,7 +284,9 @@ const normalizeTransaction = (row) => {
   admission_fee: Number(row.admission_fee ?? row.admissionFee ?? 0),
   discount: Number(row.discount ?? 0),
 
-  date: formatDate(row.paid_at || row.created_at || row.date),
+  date: formatDate(row.created_at || row.paid_at || row.date),
+  createdAt: row.created_at || null,
+  paymentDate: formatDate(row.paid_at || row.created_at || row.date),
   paidAt: row.paid_at || row.created_at || row.date || null,
   ledgerCode: String(row.transaction_reference || row.ledger_code || ""),
 
@@ -441,7 +443,7 @@ export function MemberProvider({ children }) {
   // The backend already has a dedicated, transactional endpoint
   // for this — POST /members/:id/renew — which expires the old
   // membership row, creates the new one, and records the payment
-  // + receipt all in one DB transaction. This now just calls that
+  // in one DB transaction. This now just calls that
   // endpoint instead of re-implementing the logic client-side.
   //
   // renewalDetails must include a real `planId` (a plan UUID from
@@ -466,12 +468,14 @@ export function MemberProvider({ children }) {
         startDate: renewalDetails.startDate || renewalDetails.renewDate || undefined,
         expiryDate: renewalDetails.expiryDate || renewalDetails.newExpiryDate || undefined,
         amount: renewalDetails.finalAmount ?? undefined,
+        baseAmount: renewalDetails.baseAmount ?? undefined,
+        discount: renewalDetails.discount ?? undefined,
         paymentMethod: (renewalDetails.paymentMode || "cash").toLowerCase(),
         transactionReference: renewalDetails.transactionReference || undefined,
         notes: renewalDetails.notes || undefined,
       });
 
-      const result = data?.data; // { member, membership, payment, receipt }
+      const result = data?.data; // { member, membership, payment }
       const savedMember = result?.member;
       const savedMembership = result?.membership;
       const savedPayment = result?.payment;
@@ -499,8 +503,6 @@ export function MemberProvider({ children }) {
         ...renewalDetails,
         startDate: savedMembership?.start_date || renewalDetails.startDate,
         expiryDate: savedMembership?.end_date || renewalDetails.expiryDate,
-        receiptNumber: result?.receipt?.receipt_number || renewalDetails.receiptNumber || "",
-        receiptId: result?.receipt?.id || "",
         paymentId: savedPayment?.id || "",
       });
 
@@ -521,7 +523,6 @@ export function MemberProvider({ children }) {
           member: savedMember,
           membership: savedMembership,
           payment: savedPayment,
-          receipt: result?.receipt || null,
         };
       }
 

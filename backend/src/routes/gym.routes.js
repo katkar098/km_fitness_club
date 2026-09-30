@@ -4,11 +4,6 @@ const crypto = require("crypto");
 const { query, transaction } = require("../config/db");
 const auth = require("../middleware/auth");
 
-const {
-  getReceipt,
-  generateReceiptPdf,
-  receiptDownloadUrl,
-} = require("../services/receiptPdf.service");
 
 const router = express.Router();
 
@@ -27,15 +22,6 @@ const fail = (status, message) =>
   Object.assign(new Error(message), {
     statusCode: status,
   });
-
-const receiptNumber = () =>
-  `KM-${new Date()
-    .toISOString()
-    .slice(0, 10)
-    .replaceAll("-", "")}-${crypto
-    .randomUUID()
-    .slice(0, 8)
-    .toUpperCase()}`;
 
 const memberCode = () =>
   `KM-${new Date().getFullYear()}-${crypto
@@ -114,38 +100,6 @@ const queueBiometricAccessChange = async (
     [memberId, action]
   );
 };
-
-// ============================================================
-// AUDIT
-// ============================================================
-
-const audit = (
-  db,
-  userId,
-  action,
-  entityType,
-  entityId,
-  metadata = {}
-) =>
-  db.query(
-    `
-      INSERT INTO audit_logs(
-        admin_id,
-        action,
-        entity_type,
-        entity_id,
-        metadata
-      )
-      VALUES($1, $2, $3, $4, $5)
-    `,
-    [
-      userId,
-      action,
-      entityType,
-      entityId,
-      metadata,
-    ]
-  );
 
 // ============================================================
 // DASHBOARD
@@ -276,14 +230,6 @@ router.post(
           price,
           description || null,
         ]
-      );
-
-      await audit(
-        { query },
-        req.user.id,
-        "plan.created",
-        "membership_plan",
-        rows[0].id
       );
 
       res.status(201).json({
@@ -1101,32 +1047,6 @@ router.post(
             const payment =
               paymentResult.rows[0];
 
-            const receiptResult =
-              await db.query(
-                `
-                  INSERT INTO receipts(
-                    payment_id,
-                    receipt_number,
-                    receipt_type
-                  )
-
-                  VALUES(
-                    $1,
-                    $2,
-                    'new_membership'
-                  )
-
-                  RETURNING *
-                `,
-                [
-                  payment.id,
-                  receiptNumber(),
-                ]
-              );
-
-            const receipt =
-              receiptResult.rows[0];
-
             await db.query(
               `
                 UPDATE members
@@ -1172,44 +1092,14 @@ router.post(
               );
             }
 
-            await audit(
-              db,
-              req.user.id,
-              "member.enrolled",
-              "member",
-              member.id,
-              {
-                membershipId:
-                  membership.id,
-
-                paymentId:
-                  payment.id,
-
-                biometricUserId:
-                  normalizedBiometricUserId,
-              }
-            );
-
             return {
               member,
               biometricUser: biometricResult.rows[0],
               membership,
               payment,
-              receipt,
             };
           }
         );
-
-      try {
-        data.receipt.pdfPath =
-          await generateReceiptPdf(
-            data.receipt.receipt_number
-          );
-      } catch (_) {
-        data.receipt.pdfPending =
-          true;
-      }
-
       return res.status(201).json({
         success: true,
         data,
@@ -1494,6 +1384,8 @@ router.post(
         startDate,
         expiryDate,
         amount,
+        baseAmount,
+        discount,
         paymentMethod,
         transactionReference,
         notes,
@@ -1733,9 +1625,9 @@ router.post(
                   member.id,
                   membership.id,
                   finalAmount,
-                  finalAmount,
+                  Number(baseAmount ?? finalAmount),
                   0,
-                  0,
+                  Number(discount || 0),
                   paymentMethod,
                   transactionReference ||
                     null,
@@ -1745,48 +1637,6 @@ router.post(
 
             const payment =
               paymentResult.rows[0];
-
-            // ------------------------------------------------
-            // RECEIPT
-            // ------------------------------------------------
-            //
-            // FIX: the SQL below has ONLY 2 placeholders
-            // ($1, $2) because receipt_type is a hardcoded
-            // literal ('renewal'). The old code passed a
-            // 3rd value ("renewal") in the params array,
-            // which caused:
-            //
-            //   bind message supplies 3 parameters,
-            //   but prepared statement "" requires 2
-            //
-            // Fixed by passing exactly 2 params.
-            // ------------------------------------------------
-
-            const receiptResult =
-              await db.query(
-                `
-                  INSERT INTO receipts(
-                    payment_id,
-                    receipt_number,
-                    receipt_type
-                  )
-
-                  VALUES(
-                    $1,
-                    $2,
-                    'renewal'
-                  )
-
-                  RETURNING *
-                `,
-                [
-                  payment.id,
-                  receiptNumber(),
-                ]
-              );
-
-            const receipt =
-              receiptResult.rows[0];
 
             // ------------------------------------------------
             // RE-ACTIVATE MEMBER
@@ -1857,33 +1707,6 @@ router.post(
             // AUDIT
             // ------------------------------------------------
 
-            await audit(
-              db,
-              req.user.id,
-              "membership.renewed",
-              "membership",
-              membership.id,
-              {
-                memberId:
-                  member.id,
-
-                paymentId:
-                  payment.id,
-
-                startDate:
-                  membership.start_date,
-
-                expiryDate:
-                  membership.end_date,
-
-                manualStartDate:
-                  Boolean(startDate),
-
-                manualExpiryDate:
-                  Boolean(expiryDate),
-              }
-            );
-
             return {
               member:
                 updatedMember,
@@ -1892,21 +1715,9 @@ router.post(
 
               payment,
 
-              receipt,
             };
           }
         );
-
-      try {
-        data.receipt.pdfPath =
-          await generateReceiptPdf(
-            data.receipt.receipt_number
-          );
-      } catch (_) {
-        data.receipt.pdfPending =
-          true;
-      }
-
       return res.status(201).json({
         success: true,
         data,
@@ -1948,19 +1759,12 @@ router.get(
           pay.*,
 
           m.full_name,
-          m.member_code,
-
-          r.receipt_number,
-          r.receipt_type,
-          r.pdf_path
+          m.member_code
 
         FROM payments pay
 
         LEFT JOIN members m
           ON m.id = pay.member_id
-
-        LEFT JOIN receipts r
-          ON r.payment_id = pay.id
 
         ORDER BY
           pay.paid_at DESC
@@ -1978,107 +1782,15 @@ router.get(
   }
 );
 
-// Billing reset is a saved cutoff, not a destructive deletion of payment history.
-router.get("/billing/reset", async (req, res, next) => {
-  try {
-    const { rows } = await query(`
-      SELECT created_at
-      FROM audit_logs
-      WHERE action = 'billing.reset'
-        AND entity_type = 'billing'
-      ORDER BY created_at DESC
-      LIMIT 1
-    `);
-    res.json({ success: true, data: { resetAt: rows[0]?.created_at || null } });
-  } catch (error) {
-    next(error);
-  }
+// Billing reset is a temporary view cutoff, not a destructive deletion of payment history.
+router.get("/billing/reset", (req, res) => {
+  res.json({ success: true, data: { resetAt: null } });
 });
 
-router.post("/billing/reset", async (req, res, next) => {
-  try {
-    const { rows } = await query(`
-      INSERT INTO audit_logs(admin_id, action, entity_type, metadata)
-      VALUES($1, 'billing.reset', 'billing', $2)
-      RETURNING created_at
-    `, [req.user.id, { reset: "current billing view" }]);
-    res.status(201).json({ success: true, data: { resetAt: rows[0].created_at } });
-  } catch (error) {
-    next(error);
-  }
+router.post("/billing/reset", (req, res) => {
+  res.status(201).json({ success: true, data: { resetAt: new Date().toISOString() } });
 });
 
-// ============================================================
-// RECEIPT
-// ============================================================
-
-router.get(
-  "/receipts/:receiptNumber",
-  async (req, res, next) => {
-    try {
-      const receipt =
-        await getReceipt(
-          req.params.receiptNumber
-        );
-
-      if (!receipt) {
-        throw fail(
-          404,
-          "Receipt not found"
-        );
-      }
-
-      res.json({
-        success: true,
-        data: receipt,
-      });
-    } catch (error) {
-      next(error);
-    }
-  }
-);
-
-router.post(
-  "/receipts/:receiptNumber/generate",
-  async (req, res, next) => {
-    try {
-      const path =
-        await generateReceiptPdf(
-          req.params.receiptNumber
-        );
-
-      res.json({
-        success: true,
-        data: {
-          path,
-        },
-      });
-    } catch (error) {
-      next(error);
-    }
-  }
-);
-
-router.get(
-  "/receipts/:receiptNumber/download",
-  async (req, res, next) => {
-    try {
-      const url =
-        await receiptDownloadUrl(
-          req.params.receiptNumber
-        );
-
-      res.json({
-        success: true,
-        data: {
-          url,
-        },
-      });
-    } catch (error) {
-      next(error);
-    }
-  }
-);
 
 // ============================================================
 // DELETE MEMBER
@@ -2152,14 +1864,6 @@ router.delete(
                 WHERE id = $1
               `,
               [member.id]
-            );
-
-            await audit(
-              db,
-              req.user.id,
-              "member.deleted",
-              "member",
-              member.id
             );
 
             return {

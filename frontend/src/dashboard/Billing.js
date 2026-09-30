@@ -1,11 +1,13 @@
 import React, { useEffect, useMemo, useState } from "react";
 import Home from "./Home";
 import { useMember } from "./MemberContext";
+import { useNavigate } from "react-router-dom";
 import api from "../services/api";
 import * as XLSX from "xlsx";
 import { saveAs } from "file-saver";
 
 function Billing() {
+  const navigate = useNavigate();
   const { transactions, addOtherIncome, markTransactionPaid } =
     useMember();
   // =====================================================
@@ -26,6 +28,7 @@ function Billing() {
 
     return (
       type === "membership" ||
+      type === "new admission" ||
       type === "renewal" ||
       type === "new_membership" ||
       type === "membership_payment"
@@ -277,12 +280,29 @@ function Billing() {
     setIncomeError("");
 
     try {
-      await addOtherIncome({
+      const savedIncome = await addOtherIncome({
         name: formData.name,
         description: formData.description,
         amount: formData.amount,
         status: formData.status,
       });
+
+      if (formData.status === "Paid" && savedIncome?.id) {
+        navigate("/receipt", {
+          state: {
+            receiptData: {
+              receiptType: "other_income",
+              paymentId: savedIncome.id,
+              paymentDate: savedIncome.paidAt || new Date().toISOString(),
+              description: savedIncome.description || formData.description || formData.name,
+              name: formData.name,
+              finalAmount: savedIncome.amount,
+              paymentMode: savedIncome.paymentMode,
+              notes: savedIncome.description,
+            },
+          },
+        });
+      }
 
       setFormData({
         name: "",
@@ -688,8 +708,14 @@ function Billing() {
                   <th>Name</th>
                   <th>Type</th>
                   <th>Amount</th>
+                  <th>Base Amount</th>
+                  <th>Admission Fee</th>
+                  <th>Discount</th>
+                  <th>Payment Method</th>
                   <th>Date</th>
+                  <th>Payment Date</th>
                   <th>Status</th>
+                  <th>Notes</th>
                   <th>Action</th>
                 </tr>
               </thead>
@@ -697,7 +723,7 @@ function Billing() {
               <tbody>
                 {filteredTransactions.length === 0 ? (
                   <tr>
-                    <td colSpan="7" className="text-center py-5">No Transactions Found</td>
+                    <td colSpan="13" className="text-center py-5">No Transactions Found</td>
                   </tr>
                 ) : (
                   filteredTransactions.map((t) => (
@@ -715,7 +741,12 @@ function Billing() {
 
                       <td className="fw-bold">₹{t.amount}</td>
 
-                      <td>{t.date}</td>
+                      <td>₹{getBaseAmount(t)}</td>
+                      <td>₹{getAdmissionFee(t)}</td>
+                      <td>₹{getDiscount(t)}</td>
+                      <td>{t.paymentMode || t.payment_method || "-"}</td>
+                      <td>{t.date || "-"}</td>
+                      <td>{t.paymentDate || t.date || "-"}</td>
 
                       <td>
                         {isPaid(t) ? (
@@ -724,6 +755,8 @@ function Billing() {
                           <span className="badge bg-warning text-dark">Pending</span>
                         )}
                       </td>
+
+                      <td>{t.description || t.notes || "-"}</td>
 
                       <td>
                         {!isPaid(t) ? (

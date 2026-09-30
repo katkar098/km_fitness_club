@@ -1,7 +1,8 @@
-import React, { useMemo, useRef } from "react";
+import React, { useEffect, useMemo, useRef } from "react";
 import Home from "./Home";
-import { useMember } from "./MemberContext";
 import { useLocation, useNavigate } from "react-router-dom";
+import html2canvas from "html2canvas";
+import jsPDF from "jspdf";
 
 // ============================================================
 // KM FITNESS CLUB - RECEIPT
@@ -14,33 +15,17 @@ function Receipt() {
   const navigate = useNavigate();
   const location = useLocation();
 
-  const { members = [], renewalData } = useMember();
-
   const receiptRef = useRef(null);
+
+  useEffect(() => {
+    ["km_receipt", "km_renewal_receipt", "km_membership_receipt", "receiptData"].forEach((key) => {
+      localStorage.removeItem(key);
+    });
+  }, []);
 
   // ==========================================================
   // HELPERS
   // ==========================================================
-
-  const getLocalStorageObject = (keys = []) => {
-    for (const key of keys) {
-      try {
-        const value = localStorage.getItem(key);
-
-        if (!value) continue;
-
-        const parsed = JSON.parse(value);
-
-        if (parsed && typeof parsed === "object") {
-          return parsed;
-        }
-      } catch (error) {
-        console.warn(`Unable to read localStorage key: ${key}`, error);
-      }
-    }
-
-    return null;
-  };
 
   // ----------------------------------------------------------
   // Convert any amount safely to a number
@@ -175,13 +160,6 @@ function Receipt() {
   // SAVED DATA
   // ==========================================================
 
-  const savedReceipt = getLocalStorageObject([
-    "km_receipt",
-    "km_renewal_receipt",
-    "km_membership_receipt",
-    "receiptData",
-  ]);
-
   // ----------------------------------------------------------
   // React Router state
   //
@@ -195,8 +173,6 @@ function Receipt() {
   const routeReceiptData = useMemo(
     () =>
       location?.state?.receiptData ||
-      location?.state?.member ||
-      location?.state ||
       {},
     [location.state]
   );
@@ -208,90 +184,10 @@ function Receipt() {
   const routeReceiptType =
     routeReceiptData?.receiptType;
 
-  const hasExplicitRouteType =
-    routeReceiptType === "new_membership" ||
-    routeReceiptType === "renewal" ||
-    routeReceiptData?.isRenewal === true;
-
-  const isRenewal = hasExplicitRouteType
-    ? routeReceiptType === "renewal" ||
-      routeReceiptData?.isRenewal === true
-    : Boolean(
-        renewalData ||
-        savedReceipt?.receiptType === "renewal"
-      );
-
-  // ==========================================================
-  // RECEIPT MEMBER ID
-  // ==========================================================
-
-  const receiptMemberId = firstValue(
-    routeReceiptData?.memberId,
-    routeReceiptData?.employeeCode,
-    renewalData?.memberId,
-    savedReceipt?.memberId,
-    savedReceipt?.employeeCode,
-    savedReceipt?.databaseId
-  );
-
-  // ==========================================================
-  // FIND MEMBER
-  // ==========================================================
-
-  const member = useMemo(() => {
-    if (!Array.isArray(members) || members.length === 0) {
-      return null;
-    }
-
-    if (!receiptMemberId) {
-      return members[members.length - 1];
-    }
-
-    const target = String(receiptMemberId);
-
-    return (
-      members.find((m) =>
-        [
-          m?.id,
-          m?.memberId,
-          m?.databaseId,
-          m?.employeeCode,
-          m?.biometricUserId,
-        ].some(
-          (value) =>
-            value !== undefined &&
-            value !== null &&
-            String(value) === target
-        )
-      ) ||
-      members[members.length - 1]
-    );
-  }, [members, receiptMemberId]);
-
-  // ==========================================================
-  // COMBINE ALL POSSIBLE SOURCES
-  //
-  // Priority:
-  // Route data
-  // -> renewal data
-  // -> saved receipt
-  // -> member
-  // ==========================================================
-
-  const data = useMemo(() => {
-    return {
-      ...(member || {}),
-      ...(savedReceipt || {}),
-      ...(isRenewal ? renewalData || {} : {}),
-      ...(routeReceiptData || {}),
-    };
-  }, [
-    member,
-    savedReceipt,
-    renewalData,
-    routeReceiptData,
-    isRenewal,
-  ]);
+  const isRenewal = routeReceiptType === "renewal" || routeReceiptData?.isRenewal === true;
+  const isOtherIncome = routeReceiptType === "other_income";
+  const data = routeReceiptData;
+  const member = data?.paymentId ? data : null;
 
   // ==========================================================
   // MEMBER DETAILS
@@ -582,8 +478,8 @@ function Receipt() {
   // ==========================================================
 
   const memberStatus = firstValue(
-    isRenewal ? renewalData?.status : null,
-    data.status,
+    data.membershipStatus,
+    data.memberStatus,
     "Active"
   );
 
@@ -600,54 +496,24 @@ function Receipt() {
   );
 
   // ==========================================================
-  // RECEIPT NUMBER
-  // ==========================================================
-
-  const receiptNumber = firstValue(
-    `KM-${memberCode}`
-  );
-
-  // ==========================================================
   // RECEIPT DATE
   // ==========================================================
 
-  const receiptDate = isRenewal
-    ? firstValue(
-        data.renewDate,
-        data.renew_date,
-        data.startDate,
-        data.start_date,
-        getTodayDate()
-      )
-    : firstValue(
-        data.receiptDate,
-        data.receipt_date,
-        data.createdAt,
-        data.created_at,
-        startDate,
-        getTodayDate()
-      );
-
-  // ==========================================================
-  // DEBUG
-  // ==========================================================
-
-  console.log("========== KM FITNESS RECEIPT ==========");
-  console.log("Receipt Type:", isRenewal ? "RENEWAL" : "NEW");
-  console.log("Member:", data);
-  console.log("Membership Amount:", baseAmount);
-  console.log("Admission Fee:", admissionFee);
-  console.log("Discount:", discount);
-  console.log("Final Amount:", finalAmount);
-  console.log("Payment Mode:", paymentMode);
-  console.log("Receipt Number:", receiptNumber);
-  console.log("========================================");
+  const receiptDate = firstValue(
+    data.paymentDate,
+    data.paid_at,
+    data.receiptDate,
+    data.receipt_date,
+    data.createdAt,
+    data.created_at,
+    getTodayDate()
+  );
 
   // ==========================================================
   // NO MEMBER / NO DATA
   // ==========================================================
 
-  if (!member && !savedReceipt && !routeReceiptData?.name) {
+  if (!member) {
     return (
       <Home>
         <div className="receipt-page">
@@ -676,18 +542,22 @@ function Receipt() {
   // PRINT
   // ==========================================================
 
-  const handleDownload = () => {
-    const oldTitle = document.title;
-
-    document.title = isRenewal
-      ? `KM-Fitness-Renewal-${memberCode}`
-      : `KM-Fitness-Receipt-${memberCode}`;
-
-    window.print();
-
-    setTimeout(() => {
-      document.title = oldTitle;
-    }, 1000);
+  const handleDownload = async () => {
+    if (!receiptRef.current) return;
+    const canvas = await html2canvas(receiptRef.current, { scale: 2, backgroundColor: "#ffffff" });
+    const pdf = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
+    const width = pdf.internal.pageSize.getWidth();
+    const height = (canvas.height * width) / canvas.width;
+    pdf.addImage(canvas.toDataURL("image/png"), "PNG", 0, 0, width, height);
+    const blob = pdf.output("blob");
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    const safeName = String(memberName || "Member").replace(/[^a-z0-9-]+/gi, "-").replace(/^-|-$/g, "");
+    const day = String(receiptDate || getTodayDate()).slice(0, 10).split("-").reverse().join("-");
+    link.href = url;
+    link.download = `KM-Fitness-${isOtherIncome ? "Other-Income" : isRenewal ? "Renewal" : "Admission"}-${safeName}-${day}.pdf`;
+    link.click();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
   };
 
   // ==========================================================
@@ -695,11 +565,14 @@ function Receipt() {
   // ==========================================================
 
   const createWhatsAppMessage = () => {
+    if (isOtherIncome) {
+      return `KM FITNESS CLUB\nOTHER INCOME RECEIPT\n\nDescription: ${data.description || data.name || "Other Income"}\n\nAmount Paid: ₹${formatMoney(finalAmount)}\n\nPayment Date: ${formatDate(receiptDate)}\n\nPayment Method: ${paymentMode}\n\nNotes: ${data.notes || data.description || "-"}`;
+    }
     if (isRenewal) {
       return `KM FITNESS CLUB
 RENEWAL RECEIPT
 
-Receipt No: ${receiptNumber}
+Payment Type: Membership Renewal
 
 Member Code: ${memberCode}
 
@@ -710,6 +583,8 @@ Plan: ${memberPlan}
 Duration: ${duration}
 
 Renewal Date: ${formatDate(receiptDate)}
+
+Payment Date: ${formatDate(receiptDate)}
 
 Previous Expiry: ${formatDate(previousExpiry)}
 
@@ -729,7 +604,7 @@ Thank you for choosing KM Fitness Club.`;
     return `KM FITNESS CLUB
 MEMBERSHIP RECEIPT
 
-Receipt No: ${receiptNumber}
+Payment Type: New Admission
 
 Member Code: ${memberCode}
 
@@ -740,6 +615,8 @@ Plan: ${memberPlan}
 Duration: ${duration}
 
 Start Date: ${formatDate(startDate)}
+
+Payment Date: ${formatDate(receiptDate)}
 
 Expiry Date: ${formatDate(newExpiry)}
 
@@ -832,7 +709,7 @@ Thank you for joining KM Fitness Club.`;
                   : "membership"
               }`}
             >
-              {isRenewal
+              {isOtherIncome ? "OTHER INCOME RECEIPT" : isRenewal
                 ? "RENEWAL RECEIPT"
                 : "MEMBERSHIP RECEIPT"}
             </div>
@@ -844,11 +721,6 @@ Thank you for joining KM Fitness Club.`;
           <div className="receipt-meta">
 
             <div>
-              <span>Receipt No.</span>
-              <strong>{receiptNumber}</strong>
-            </div>
-
-            <div>
               <span>Receipt Date</span>
               <strong>{formatDate(receiptDate)}</strong>
             </div>
@@ -857,7 +729,7 @@ Thank you for joining KM Fitness Club.`;
 
           {/* MEMBER DETAILS */}
 
-          <section className="receipt-section">
+          {!isOtherIncome && <section className="receipt-section">
 
             <div className="section-title">
               Member Details
@@ -899,11 +771,11 @@ Thank you for joining KM Fitness Club.`;
 
             </div>
 
-          </section>
+          </section>}
 
           {/* MEMBERSHIP DETAILS */}
 
-          <section className="receipt-section">
+          {!isOtherIncome && <section className="receipt-section">
 
             <div className="section-title">
               Membership Details
@@ -954,7 +826,7 @@ Thank you for joining KM Fitness Club.`;
 
             </div>
 
-          </section>
+          </section>}
 
           {/* PAYMENT */}
 
@@ -967,16 +839,14 @@ Thank you for joining KM Fitness Club.`;
             <div className="payment-table">
 
               <div className="payment-row">
-                <span>
-                  Membership Amount
-                </span>
+                <span>{isOtherIncome ? "Description" : "Membership Amount"}</span>
 
                 <strong>
-                  ₹{formatMoney(baseAmount)}
+                  {isOtherIncome ? (data.description || data.name || "Other Income") : `₹${formatMoney(baseAmount)}`}
                 </strong>
               </div>
 
-              {!isRenewal && (
+              {!isOtherIncome && !isRenewal && (
                 <div className="payment-row">
                   <span>
                     Admission Fee
@@ -988,7 +858,7 @@ Thank you for joining KM Fitness Club.`;
                 </div>
               )}
 
-              {discount > 0 && (
+              {!isOtherIncome && discount > 0 && (
                 <div className="payment-row discount-row">
                   <span>
                     Discount
@@ -1004,7 +874,7 @@ Thank you for joining KM Fitness Club.`;
 
                 <div>
                   <span>
-                    {isRenewal
+                    {isOtherIncome ? "AMOUNT PAID" : isRenewal
                       ? "TOTAL RENEWAL AMOUNT"
                       : "TOTAL PAID"}
                   </span>

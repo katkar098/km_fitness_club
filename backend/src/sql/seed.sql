@@ -34,21 +34,20 @@ VALUES
     ('MF000010', 'Lisa Anderson', '+919876543219', 'lisa.anderson@example.com', 'female', '1994-08-22', '741 Elm Street, Lucknow', 'Standard 6 Months', CURRENT_DATE - INTERVAL '3 months', CURRENT_DATE + INTERVAL '3 months', 'Active');
 
 -- Seed payments
-INSERT INTO public.payments (member_id, plan_id, amount, payment_method, transaction_id, status, receipt_number)
+INSERT INTO public.payments (member_id, plan_id, amount, payment_method, transaction_id, status)
 SELECT 
     m.id,
     (SELECT id FROM public.membership_plans WHERE plan_name = m.membership_plan LIMIT 1),
     mp.amount,
     CASE WHEN random() > 0.5 THEN 'cash' ELSE 'card' END,
     'TXN' || TO_CHAR(CURRENT_DATE, 'YYYYMMDD') || LPAD(floor(random() * 10000)::text, 4, '0'),
-    'completed',
-    'RCP' || TO_CHAR(CURRENT_DATE, 'YYYYMMDD') || LPAD(floor(random() * 10000)::text, 4, '0')
+    'completed'
 FROM public.members m
 JOIN public.membership_plans mp ON mp.plan_name = m.membership_plan
 WHERE m.id IN (SELECT id FROM public.members WHERE status = 'Active' ORDER BY random() LIMIT 5);
 
 -- Seed some past payments
-INSERT INTO public.payments (member_id, plan_id, amount, payment_date, payment_method, transaction_id, status, receipt_number)
+INSERT INTO public.payments (member_id, plan_id, amount, payment_date, payment_method, transaction_id, status)
 SELECT 
     m.id,
     (SELECT id FROM public.membership_plans WHERE plan_name = m.membership_plan LIMIT 1),
@@ -56,8 +55,7 @@ SELECT
     (CURRENT_DATE - INTERVAL '1 month' + (random() * INTERVAL '10 days')),
     CASE WHEN random() > 0.5 THEN 'cash' ELSE 'card' END,
     'TXN' || TO_CHAR(CURRENT_DATE - INTERVAL '1 month', 'YYYYMMDD') || LPAD(floor(random() * 10000)::text, 4, '0'),
-    'completed',
-    'RCP' || TO_CHAR(CURRENT_DATE - INTERVAL '1 month', 'YYYYMMDD') || LPAD(floor(random() * 10000)::text, 4, '0')
+    'completed'
 FROM public.members m
 JOIN public.membership_plans mp ON mp.plan_name = m.membership_plan
 WHERE m.id IN (SELECT id FROM public.members ORDER BY random() LIMIT 5);

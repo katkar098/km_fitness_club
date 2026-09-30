@@ -57,7 +57,7 @@ const errorHandler = (err, req, res, next) => {
   ) {
     return res.status(409).json({
       success: false,
-      message: 'A Supabase payment or receipt check constraint rejected other_income. Run backend/src/sql/migrations/20260926_billing_other_income.sql against the same database configured in backend/.env, then restart the backend.'
+      message: 'A Supabase payment check constraint rejected other_income. Run backend/src/sql/migrations/20260926_billing_other_income.sql against the same database configured in backend/.env, then restart the backend.'
     });
   }
 

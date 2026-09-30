@@ -727,16 +727,16 @@ function CreateUser() {
         // ======================================================
 
         baseAmount:
-          baseAmount,
+          data?.data?.payment?.base_amount ?? baseAmount,
 
         admissionFee:
-          admissionAmount,
+          data?.data?.payment?.admission_fee ?? admissionAmount,
 
         discount:
-          discount,
+          data?.data?.payment?.discount ?? discount,
 
         finalAmount:
-          finalAmount,
+          data?.data?.payment?.amount ?? finalAmount,
 
         paymentMode:
           form.paymentMode,
@@ -744,9 +744,6 @@ function CreateUser() {
         // ======================================================
         // STATUS
         // ======================================================
-
-        status:
-          "Active",
 
         membershipStatus:
           data?.data?.membership?.status || "",
@@ -782,6 +779,12 @@ function CreateUser() {
       const receiptData = {
         receiptType:
           "new_membership",
+
+        paymentId:
+          data?.data?.payment?.id || "",
+
+        paymentDate:
+          data?.data?.payment?.paid_at || new Date().toISOString(),
 
         // Internal UUID
         memberId:
@@ -835,37 +838,29 @@ function CreateUser() {
         // ======================================================
 
         baseAmount:
-          baseAmount,
+          data?.data?.payment?.base_amount ?? baseAmount,
 
         admissionFee:
-          admissionAmount,
+          data?.data?.payment?.admission_fee ?? admissionAmount,
 
         discount:
-          discount,
+          data?.data?.payment?.discount ?? discount,
 
         finalAmount:
-          finalAmount,
+          data?.data?.payment?.amount ?? finalAmount,
 
         paymentMode:
-          form.paymentMode,
+          data?.data?.payment?.payment_method || form.paymentMode,
 
-        status:
-          "Active",
+        paymentStatus:
+          data?.data?.payment?.status || "completed",
+
+        membershipStatus:
+          data?.data?.membership?.status || "active",
 
         biometricUserId:
           selectedId,
       };
-
-      localStorage.setItem(
-        "km_receipt",
-        JSON.stringify(
-          receiptData
-        )
-      );
-
-      localStorage.removeItem(
-        "km_renewal_receipt"
-      );
 
       // ========================================================
       // REMOVE CREATED USER FROM CREATE USER LIST

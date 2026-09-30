@@ -20,6 +20,7 @@ function RenewMembership() {
 
   const [plans, setPlans] = useState([]);
   const [renewSaving, setRenewSaving] = useState(false);
+  const [lastRenewalReceipt, setLastRenewalReceipt] = useState(null);
 
   const [renewDate, setRenewDate] = useState("");
   const [newExpiryDate, setNewExpiryDate] = useState("");
@@ -497,10 +498,19 @@ function RenewMembership() {
         expiryDate: savedExpiryDate,
         endDate: savedExpiryDate,
         receiptType: "renewal",
-        receiptNumber: savedRenewal?.receipt?.receipt_number || "",
-        receiptId: savedRenewal?.receipt?.id || "",
         paymentId: savedRenewal?.payment?.id || "",
+        paymentDate: savedRenewal?.payment?.paid_at || new Date().toISOString(),
+        baseAmount: savedRenewal?.payment?.base_amount ?? baseAmount,
+        discount: savedRenewal?.payment?.discount ?? discountAmount,
+        finalAmount: savedRenewal?.payment?.amount ?? finalAmount,
+        paymentMode: savedRenewal?.payment?.payment_method || paymentMode,
+        memberId: member.memberId || member.databaseId || member.id,
+        memberCode: getSelectedMemberCode(member),
+        name: member.name || member.fullName || "",
+        mobile: member.mobile || member.phone || "",
+        oldExpiryDate: member.expiryDate || member.endDate || "",
       };
+      setLastRenewalReceipt(receiptData);
 
       // =================================================
       // UPDATE CURRENT SCREEN
@@ -536,15 +546,6 @@ function RenewMembership() {
 
         status: "Active",
       }));
-
-      // =================================================
-      // SAVE RECEIPT DATA
-      // =================================================
-
-      localStorage.setItem(
-        "km_renewal_receipt",
-        JSON.stringify(receiptData)
-      );
 
       alert(
         "Membership renewed successfully."
@@ -596,102 +597,20 @@ function RenewMembership() {
       return;
     }
 
-    // After a renewal is saved, `member.expiryDate` is updated to the new
-    // date. Reuse the pre-renewal expiry captured in the saved receipt for
-    // this same member instead of labeling the new date as the old expiry.
-    let savedRenewalReceipt = null;
-    try {
-      savedRenewalReceipt = JSON.parse(
-        localStorage.getItem("km_renewal_receipt") || "null"
-      );
-    } catch {
-      savedRenewalReceipt = null;
-    }
-
-    const currentMemberIds = [
-      member.memberId,
-      member.databaseId,
-      member.uuid,
-      member.id,
-    ]
+    const currentMemberIds = [member.memberId, member.databaseId, member.id]
       .filter(Boolean)
       .map(String);
-    const savedReceiptMemberId = String(
-      savedRenewalReceipt?.memberId ||
-        savedRenewalReceipt?.databaseId ||
-        ""
-    );
-    const savedOldExpiryDate =
-      savedReceiptMemberId && currentMemberIds.includes(savedReceiptMemberId)
-        ? savedRenewalReceipt?.oldExpiryDate ||
-          savedRenewalReceipt?.old_expiry_date ||
-          ""
-        : "";
-
-    const receiptData = {
-      memberId:
-        member.memberId ||
-        member.databaseId ||
-        member.uuid ||
-        member.id,
-
-      memberCode:
-        getSelectedMemberCode(member),
-
-      name:
-        member.name ||
-        member.fullName ||
-        "",
-
-      mobile:
-        member.mobile ||
-        member.phone ||
-        "",
-
-      plan,
-      duration,
-
-      baseAmount,
-
-      discount: discountAmount,
-
-      finalAmount,
-
-      paymentMode,
-
-      oldExpiryDate:
-        savedOldExpiryDate ||
-        member.expiryDate ||
-        member.endDate ||
-        "",
-
-      renewDate,
-
-      startDate: renewDate,
-
-      expiryDate: newExpiryDate,
-
-      endDate: newExpiryDate,
-
-      status: "Active",
-      receiptNumber: (() => {
-        try {
-          return JSON.parse(localStorage.getItem("km_renewal_receipt") || "null")?.receiptNumber || "";
-        } catch {
-          return "";
-        }
-      })(),
-      receiptType: "renewal",
-    };
-
-    localStorage.setItem(
-      "km_renewal_receipt",
-      JSON.stringify(receiptData)
-    );
+    if (
+      !lastRenewalReceipt?.paymentId ||
+      !currentMemberIds.includes(String(lastRenewalReceipt.memberId))
+    ) {
+      alert("Save the renewal payment before generating its receipt.");
+      return;
+    }
 
     navigate("/receipt", {
       state: {
-        receiptData,
+        receiptData: lastRenewalReceipt,
       },
     });
   };

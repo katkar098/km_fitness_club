@@ -5,10 +5,6 @@
 
 create extension if not exists pgcrypto;
 
-insert into storage.buckets (id, name, public)
-values ('receipts', 'receipts', false)
-on conflict (id) do update set public = false;
-
 create table if not exists public.admin_users (
   id uuid primary key references auth.users(id) on delete cascade,
   email text not null unique,
@@ -88,15 +84,6 @@ create table if not exists public.payments (
 create unique index if not exists unique_transaction_reference
   on public.payments(transaction_reference) where transaction_reference is not null;
 
-create table if not exists public.receipts (
-  id uuid primary key default gen_random_uuid(),
-  payment_id uuid not null unique references public.payments(id) on delete restrict,
-  receipt_number text not null unique,
-  receipt_type text not null check (receipt_type in ('new_membership','renewal','other_income')),
-  pdf_path text,
-  created_at timestamptz not null default now()
-);
-
 create table if not exists public.biometric_sync_queue (
   id uuid primary key default gen_random_uuid(),
   member_id uuid not null references public.members(id) on delete restrict,
@@ -107,16 +94,6 @@ create table if not exists public.biometric_sync_queue (
   processed_at timestamptz,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
-);
-
-create table if not exists public.audit_logs (
-  id uuid primary key default gen_random_uuid(),
-  admin_id uuid references auth.users(id) on delete set null,
-  action text not null,
-  entity_type text not null,
-  entity_id uuid,
-  metadata jsonb,
-  created_at timestamptz not null default now()
 );
 
 create index if not exists members_status_idx on public.members(status);
@@ -144,6 +121,4 @@ alter table public.membership_plans enable row level security;
 alter table public.members enable row level security;
 alter table public.memberships enable row level security;
 alter table public.payments enable row level security;
-alter table public.receipts enable row level security;
 alter table public.biometric_sync_queue enable row level security;
-alter table public.audit_logs enable row level security;

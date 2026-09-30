@@ -225,6 +225,22 @@ function Billing() {
     const part = (type) => parts.find((item) => item.type === type)?.value || "";
     return `${part("year")}-${part("month")}-${part("day")}`;
   };
+  const formatBillingDate = (value) => {
+    if (!value) return "-";
+    const text = String(value).trim();
+    const dayFirst = text.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/);
+    if (dayFirst) {
+      return `${dayFirst[1].padStart(2, "0")}/${dayFirst[2].padStart(2, "0")}/${dayFirst[3]}`;
+    }
+    const date = value instanceof Date ? value : new Date(value);
+    if (Number.isNaN(date.getTime())) return "-";
+    return new Intl.DateTimeFormat("en-GB", {
+      timeZone: "Asia/Kolkata",
+      day: "2-digit",
+      month: "2-digit",
+      year: "numeric",
+    }).format(date);
+  };
   const todayStr = istDateKey(new Date(clock));
   const currentDate = new Date(`${todayStr}T00:00:00`);
   const currentMonth = currentDate.getMonth();
@@ -745,8 +761,8 @@ function Billing() {
                       <td>₹{getAdmissionFee(t)}</td>
                       <td>₹{getDiscount(t)}</td>
                       <td>{t.paymentMode || t.payment_method || "-"}</td>
-                      <td>{t.date || "-"}</td>
-                      <td>{t.paymentDate || t.date || "-"}</td>
+                      <td>{formatBillingDate(t.date || t.paidAt || t.paid_at)}</td>
+                      <td>{formatBillingDate(t.paymentDate || t.paidAt || t.paid_at || t.date)}</td>
 
                       <td>
                         {isPaid(t) ? (

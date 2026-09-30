@@ -12,9 +12,16 @@ const PAYMENT_SELECT = `
     pay.*,
     m.full_name,
     m.member_code,
-    m.biometric_user_id
+    biometric.biometric_id::text AS biometric_user_id
   FROM payments pay
   LEFT JOIN members m ON m.id = pay.member_id
+  LEFT JOIN LATERAL (
+    SELECT biometric_id
+    FROM biometric_users
+    WHERE member_id = m.id
+    ORDER BY biometric_id
+    LIMIT 1
+  ) biometric ON TRUE
 `;
 
 // ============================================================

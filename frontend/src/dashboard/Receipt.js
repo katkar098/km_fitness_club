@@ -1,7 +1,6 @@
-import React, { useEffect, useMemo, useRef } from "react";
+import React, { useEffect, useMemo } from "react";
 import Home from "./Home";
 import { useLocation, useNavigate } from "react-router-dom";
-import html2canvas from "html2canvas";
 import jsPDF from "jspdf";
 
 // ============================================================
@@ -14,8 +13,6 @@ import jsPDF from "jspdf";
 function Receipt() {
   const navigate = useNavigate();
   const location = useLocation();
-
-  const receiptRef = useRef(null);
 
   useEffect(() => {
     ["km_receipt", "km_renewal_receipt", "km_membership_receipt", "receiptData"].forEach((key) => {
@@ -539,25 +536,120 @@ function Receipt() {
   }
 
   // ==========================================================
-  // PRINT
+  // DOWNLOAD PDF
   // ==========================================================
 
-  const handleDownload = async () => {
-    if (!receiptRef.current) return;
-    const canvas = await html2canvas(receiptRef.current, { scale: 2, backgroundColor: "#ffffff" });
-    const pdf = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
-    const width = pdf.internal.pageSize.getWidth();
-    const height = (canvas.height * width) / canvas.width;
-    pdf.addImage(canvas.toDataURL("image/png"), "PNG", 0, 0, width, height);
-    const blob = pdf.output("blob");
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    const safeName = String(memberName || "Member").replace(/[^a-z0-9-]+/gi, "-").replace(/^-|-$/g, "");
-    const day = String(receiptDate || getTodayDate()).slice(0, 10).split("-").reverse().join("-");
-    link.href = url;
-    link.download = `KM-Fitness-${isOtherIncome ? "Other-Income" : isRenewal ? "Renewal" : "Admission"}-${safeName}-${day}.pdf`;
-    link.click();
-    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  const handleDownload = () => {
+    try {
+      const pdf = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
+      const pageWidth = pdf.internal.pageSize.getWidth();
+      const margin = 16;
+      const valueX = margin + 66;
+      const valueWidth = pageWidth - valueX - margin - 7;
+      let y = 18;
+
+      pdf.setProperties({
+        title: "KM Fitness Club Receipt",
+        subject: "Payment receipt",
+        author: "KM Fitness Club",
+      });
+      pdf.setFillColor(20, 132, 86);
+      pdf.roundedRect(margin, y, pageWidth - margin * 2, 31, 3, 3, "F");
+      pdf.setTextColor(255, 255, 255);
+      pdf.setFont("helvetica", "bold");
+      pdf.setFontSize(19);
+      pdf.text("KM FITNESS CLUB", margin + 8, y + 12);
+      pdf.setFontSize(11);
+      pdf.text(
+        isOtherIncome ? "OTHER INCOME RECEIPT" : isRenewal ? "RENEWAL RECEIPT" : "MEMBERSHIP RECEIPT",
+        margin + 8,
+        y + 22
+      );
+      pdf.setFont("helvetica", "normal");
+      pdf.setFontSize(9);
+      pdf.text("Kalyan East, Maharashtra", pageWidth - margin - 8, y + 22, { align: "right" });
+      pdf.setTextColor(35, 45, 40);
+      y += 40;
+
+      const addSection = (title) => {
+        pdf.setFillColor(239, 247, 242);
+        pdf.roundedRect(margin, y, pageWidth - margin * 2, 9, 1.5, 1.5, "F");
+        pdf.setFont("helvetica", "bold");
+        pdf.setFontSize(10);
+        pdf.setTextColor(20, 105, 70);
+        pdf.text(title, margin + 4, y + 6);
+        pdf.setTextColor(35, 45, 40);
+        y += 13;
+      };
+
+      const addRow = (label, value, emphasize = false) => {
+        const lines = pdf.splitTextToSize(String(value || "-"), valueWidth);
+        const rowHeight = Math.max(8, lines.length * 4.5 + 3);
+        if (y + rowHeight > 278) {
+          pdf.addPage();
+          y = 18;
+        }
+        pdf.setFont("helvetica", emphasize ? "bold" : "normal");
+        pdf.setFontSize(emphasize ? 11 : 10);
+        pdf.text(label, margin + 4, y + 5);
+        pdf.text(lines, valueX, y + 5);
+        pdf.setDrawColor(225, 231, 227);
+        pdf.line(margin + 4, y + rowHeight, pageWidth - margin - 4, y + rowHeight);
+        y += rowHeight;
+      };
+
+      addSection("Receipt Details");
+      addRow("Receipt date", formatDate(receiptDate));
+      if (data.paymentId) addRow("Payment reference", String(data.paymentId));
+
+      if (isOtherIncome) {
+        addSection("Payment Details");
+        addRow("Description", data.description || data.name || "Other Income");
+        addRow("Payment method", paymentMode);
+        if (data.notes) addRow("Notes", data.notes);
+        addRow("Amount paid", `INR ${formatMoney(finalAmount)}`, true);
+      } else {
+        addSection("Member Details");
+        addRow("Member code", memberCode);
+        addRow("Name", memberName);
+        addRow("Mobile", memberMobile);
+        addRow("Membership plan", memberPlan);
+        addRow("Duration", duration);
+        addRow("Status", memberStatus);
+
+        addSection("Membership Dates");
+        if (isRenewal) {
+          addRow("Renewal date", formatDate(receiptDate));
+          addRow("Previous expiry", formatDate(previousExpiry));
+          addRow("New expiry", formatDate(newExpiry));
+        } else {
+          addRow("Start date", formatDate(startDate));
+          addRow("Expiry date", formatDate(newExpiry));
+        }
+
+        addSection("Payment Details");
+        addRow("Payment date", formatDate(receiptDate));
+        addRow("Payment method", paymentMode);
+        addRow("Membership amount", `INR ${formatMoney(baseAmount)}`);
+        if (!isRenewal) addRow("Admission fee", `INR ${formatMoney(admissionFee)}`);
+        if (discount > 0) addRow("Discount", `INR ${formatMoney(discount)}`);
+        addRow("Total paid", `INR ${formatMoney(finalAmount)}`, true);
+      }
+
+      y += 12;
+      pdf.setFont("helvetica", "italic");
+      pdf.setFontSize(10);
+      pdf.setTextColor(20, 105, 70);
+      pdf.text("Thank you for choosing KM Fitness Club.", pageWidth / 2, y, { align: "center" });
+
+      const safeName = String(memberName || "Member").replace(/[^a-z0-9-]+/gi, "-").replace(/^-|-$/g, "");
+      const day = String(receiptDate || getTodayDate()).slice(0, 10).split("-").reverse().join("-");
+      const fileType = isOtherIncome ? "Other-Income" : isRenewal ? "Renewal" : "Admission";
+      pdf.save(`KM-Fitness-${fileType}-${safeName}-${day}.pdf`);
+    } catch (error) {
+      console.error("Failed to download receipt PDF:", error);
+      alert("The receipt could not be downloaded. Please try again.");
+    }
   };
 
   // ==========================================================
@@ -674,7 +766,6 @@ Thank you for joining KM Fitness Club.`;
         ==================================================== */}
 
         <div
-          ref={receiptRef}
           className="receipt-wrapper"
         >
 

@@ -405,13 +405,11 @@ router.get(
             p.name AS plan_name,
             p.duration_days AS plan_duration_days,
 
-            pay.amount AS final_amount,
-            pay.payment_method,
+            biometric.biometric_id::text AS biometric_user_id,
+            biometric.sync_status AS biometric_sync_status,
 
-            sync.action AS biometric_sync_action,
-            sync.status AS biometric_sync_status,
-            sync.last_error AS biometric_sync_error,
-            sync.processed_at AS biometric_sync_processed_at
+            pay.amount AS final_amount,
+            pay.payment_method
 
           FROM members m
 
@@ -449,19 +447,19 @@ router.get(
           ) pay ON TRUE
 
           LEFT JOIN LATERAL (
-            SELECT
-              action,
-              status,
-              last_error,
-              processed_at
-            FROM biometric_sync_queue
+            SELECT biometric_id, sync_status
+            FROM biometric_users
             WHERE member_id = m.id
-            ORDER BY created_at DESC
+            ORDER BY biometric_id
             LIMIT 1
-          ) sync ON TRUE
+          ) biometric ON TRUE
 
           WHERE
-            m.biometric_machine_member = TRUE
+            EXISTS (
+              SELECT 1
+              FROM biometric_users mapped_user
+              WHERE mapped_user.member_id = m.id
+            )
 
             AND (
               $1 = ''
@@ -515,13 +513,11 @@ router.get(
             p.name AS plan_name,
             p.duration_days AS plan_duration_days,
 
-            pay.amount AS final_amount,
-            pay.payment_method,
+            biometric.biometric_id::text AS biometric_user_id,
+            biometric.sync_status AS biometric_sync_status,
 
-            sync.action AS biometric_sync_action,
-            sync.status AS biometric_sync_status,
-            sync.last_error AS biometric_sync_error,
-            sync.processed_at AS biometric_sync_processed_at
+            pay.amount AS final_amount,
+            pay.payment_method
 
           FROM members m
 
@@ -559,22 +555,21 @@ router.get(
           ) pay ON TRUE
 
           LEFT JOIN LATERAL (
-            SELECT
-              action,
-              status,
-              last_error,
-              processed_at
-            FROM biometric_sync_queue
+            SELECT biometric_id, sync_status
+            FROM biometric_users
             WHERE member_id = m.id
-            ORDER BY created_at DESC
+            ORDER BY biometric_id
             LIMIT 1
-          ) sync ON TRUE
+          ) biometric ON TRUE
 
           WHERE
             m.id = $1
 
-            AND
-            m.biometric_machine_member = TRUE
+            AND EXISTS (
+              SELECT 1
+              FROM biometric_users mapped_user
+              WHERE mapped_user.member_id = m.id
+            )
         `,
         [req.params.id]
       );
@@ -1676,7 +1671,7 @@ router.delete(
             const memberResult =
               await db.query(
                 `
-                  SELECT *
+                  SELECT id
                   FROM members
 
                   WHERE id = $1
@@ -1700,13 +1695,16 @@ router.delete(
 
             await db.query(
               `
-                DELETE FROM biometric_sync_queue
-
+                UPDATE biometric_users
+                SET member_id = NULL,
+                    sync_status = 'unregistered'
                 WHERE member_id = $1
               `,
               [member.id]
             );
 
+            // Preserve the payment ledger while removing its member and
+            // membership references before deleting the dependent rows.
             await db.query(
               `
                 UPDATE payments

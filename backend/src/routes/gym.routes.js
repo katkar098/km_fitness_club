@@ -630,16 +630,14 @@ router.get(
 router.post(
   "/members/enroll",
   async (req, res, next) => {
+    let enrollmentOperation = "REQUEST VALIDATION";
     try {
       const {
         fullName,
         phone,
-        email,
         gender,
         dateOfBirth,
         address,
-        emergencyContactName,
-        emergencyContactPhone,
         biometricUserId,
         planId,
         startDate,
@@ -648,7 +646,6 @@ router.post(
         discount,
         amount,
         paymentMethod,
-        transactionReference,
         notes,
       } = req.body;
 
@@ -700,10 +697,10 @@ router.post(
       const data =
         await transaction(
           async (db) => {
-            const planResult =
-              await db.query(
+            enrollmentOperation = "PLAN LOOKUP";
+            const planResult = await db.query(
                 `
-                  SELECT *
+                  SELECT id, name, duration_days, price
                   FROM membership_plans
 
                   WHERE id = $1
@@ -724,121 +721,38 @@ router.post(
               );
             }
 
-            // Serialize claims by normalized biometric ID. The conditional
-            // UPDATE below remains the final guard across concurrent admins.
+            // Lock and validate the selected, unregistered biometric row.
+            // Its member_id is the source of truth for the mapping in this schema.
+            enrollmentOperation = "BIOMETRIC USER LOOKUP";
+            const biometricCandidateResult = await db.query(
+              `
+                SELECT biometric_id, name, machine_user_id, member_id, sync_status
+                FROM biometric_users
+                WHERE biometric_id::text = $1
+                  AND sync_status = 'unregistered'
+                  AND member_id IS NULL
+                FOR UPDATE
+              `,
+              [String(biometricUserId).trim()]
+            );
+
+            if (!biometricCandidateResult.rows[0]) {
+              throw fail(
+                409,
+                "The selected biometric user is no longer available for registration. It may already be registered."
+              );
+            }
+
+            // Serialize claims by normalized biometric ID across requests.
+            enrollmentOperation = "BIOMETRIC CLAIM LOCK";
             await db.query(
               "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
               [`member-biometric:${normalizedBiometricUserId}`]
             );
 
-            const existingResult =
-              await db.query(
-                `
-                  SELECT
-                    m.*,
-                    EXISTS (
-                      SELECT 1
-                      FROM memberships ms
-                      WHERE ms.member_id = m.id
-                        AND ms.status = 'active'
-                    ) AS has_active_membership
-                  FROM members m
-
-                  WHERE biometric_user_id
-                    IS NOT NULL
-
-                    AND btrim(
-                      biometric_user_id
-                    ) <> ''
-
-                    AND regexp_replace(
-                      btrim(
-                        biometric_user_id
-                      ),
-                      '^0+(\\d)',
-                      '\\1'
-                    ) = $1
-
-                  FOR UPDATE
-                `,
-                [
-                  normalizedBiometricUserId,
-                ]
-              );
-
-            const isNewMember =
-              existingResult.rows.length === 0;
-
-            if (
-              existingResult.rows[0]
-            ) {
-              const existingMember =
-                existingResult.rows[0];
-
-              if (
-                existingMember.created_by_admin_id ||
-                existingMember.has_active_membership
-              ) {
-                throw fail(
-                  409,
-                  `Biometric user ${normalizedBiometricUserId} is already registered.`
-                );
-              }
-
-              const updatedMemberResult =
-                await db.query(
-                  `
-                    UPDATE members
-                    SET
-                      biometric_machine_member = TRUE,
-                      full_name = $2,
-                      phone = $3,
-                      email = $4,
-                      gender = $5,
-                      date_of_birth = $6,
-                      address = $7,
-                      emergency_contact_name = $8,
-                      emergency_contact_phone = $9,
-                      created_by_admin_id = $10,
-                      status = 'active',
-                      biometric_access_enabled = TRUE,
-                      updated_at = NOW()
-                    WHERE id = $1
-                    RETURNING *
-                  `,
-                  [
-                    existingMember.id,
-                    fullName.trim(),
-                    phone || null,
-                    email || null,
-                    gender || null,
-                    dateOfBirth || null,
-                    address || null,
-                    emergencyContactName || null,
-                    emergencyContactPhone || null,
-                    req.user.id,
-                  ]
-                );
-
-              existingResult.rows[0] =
-                updatedMemberResult.rows[0];
-            }
-
-            const start =
-              startDate ||
-              new Date()
-                .toISOString()
-                .slice(0, 10);
-
-            const explicitExpiry =
-              expiryDate || null;
-
-            if (explicitExpiry) {
-              validateMembershipDates(
-                start,
-                explicitExpiry
-              );
-            }
+            const start = startDate;
+            const explicitExpiry = expiryDate;
+            validateMembershipDates(start, explicitExpiry);
 
             const safeAdmissionFee =
               Number(admissionFee) ||
@@ -868,62 +782,54 @@ router.post(
                   )
                 : calculatedAmount;
 
-            const member = existingResult.rows[0] ||
-              (await db.query(
+            enrollmentOperation = "MEMBER INSERT";
+            const memberResult = await db.query(
                 `
                   INSERT INTO members(
                     member_code,
-                    biometric_user_id,
-                    biometric_machine_member,
                     full_name,
                     phone,
-                    email,
                     gender,
                     date_of_birth,
                     address,
-                    emergency_contact_name,
-                    emergency_contact_phone,
-                    created_by_admin_id,
                     status,
-                    biometric_access_enabled
+                    biometric_enabled
                   )
 
                   VALUES(
                     $1,
                     $2,
-                    TRUE,
                     $3,
                     $4,
                     $5,
                     $6,
-                    $7,
-                    $8,
-                    $9,
-                    $10,
-                    $11,
                     'active',
                     TRUE
                   )
 
-                  RETURNING *
+                  RETURNING
+                    id,
+                    member_code,
+                    full_name,
+                    phone,
+                    gender,
+                    date_of_birth,
+                    address,
+                    status,
+                    biometric_enabled
                 `,
                 [
                   memberCode(),
-                  normalizedBiometricUserId,
                   fullName.trim(),
                   phone || null,
-                  email || null,
                   gender || null,
                   dateOfBirth || null,
                   address || null,
-                  emergencyContactName ||
-                    null,
-                  emergencyContactPhone ||
-                    null,
-                  req.user.id,
                 ]
-              )).rows[0];
+              );
+            const member = memberResult.rows[0];
 
+            enrollmentOperation = "BIOMETRIC UPDATE";
             const biometricResult = await db.query(
               `
                 UPDATE biometric_users
@@ -949,68 +855,52 @@ router.post(
               );
             }
 
-            const membershipResult =
-              await db.query(
+            enrollmentOperation = "MEMBERSHIP INSERT";
+            const membershipResult = await db.query(
                 `
                   INSERT INTO memberships(
                     member_id,
                     plan_id,
                     start_date,
                     end_date,
-                    status
+                    status,
+                    amount
                   )
 
                   VALUES(
                     $1,
                     $2,
                     $3::date,
-
-                    COALESCE(
-                      $5::date,
-
-                      (
-                        $3::date +
-                        (
-                          (
-                            $4::int - 1
-                          ) *
-                          INTERVAL '1 day'
-                        )
-                      )::date
-                    ),
-
-                    'active'
+                    $4::date,
+                    'active',
+                    $5
                   )
 
-                  RETURNING *
+                  RETURNING id, member_id, plan_id, start_date, end_date, status, amount
                 `,
                 [
                   member.id,
                   plan.id,
                   start,
-                  Number(
-                    plan.duration_days
-                  ),
                   explicitExpiry,
+                  Number(plan.price),
                 ]
               );
 
             const membership =
               membershipResult.rows[0];
 
-            const paymentResult =
-              await db.query(
+            enrollmentOperation = "PAYMENT INSERT";
+            const paymentResult = await db.query(
                 `
                   INSERT INTO payments(
                     member_id,
                     membership_id,
-                    receipt_type,
                     amount,
                     base_amount,
                     admission_fee,
                     discount,
                     payment_method,
-                    transaction_reference,
                     notes,
                     status
                   )
@@ -1018,18 +908,27 @@ router.post(
                   VALUES(
                     $1,
                     $2,
-                    'new_membership',
                     $3,
                     $4,
                     $5,
                     $6,
                     $7,
                     $8,
-                    $9,
                     'completed'
                   )
 
-                  RETURNING *
+                  RETURNING
+                    id,
+                    member_id,
+                    membership_id,
+                    amount,
+                    payment_method,
+                    status,
+                    paid_at,
+                    base_amount,
+                    admission_fee,
+                    discount,
+                    notes
                 `,
                 [
                   member.id,
@@ -1039,8 +938,6 @@ router.post(
                   safeAdmissionFee,
                   safeDiscount,
                   paymentMethod,
-                  transactionReference ||
-                    null,
                   notes || null,
                 ]
               );
@@ -1048,51 +945,10 @@ router.post(
             const payment =
               paymentResult.rows[0];
 
-            await db.query(
-              `
-                UPDATE members
+            member.biometric_user_id = normalizedBiometricUserId;
+            member.biometric_sync_status = biometricResult.rows[0].sync_status;
 
-                SET
-                  status = 'active',
-                  biometric_access_enabled = TRUE,
-                  biometric_machine_member = TRUE
-
-                WHERE id = $1
-              `,
-              [member.id]
-            );
-
-            if (isNewMember) {
-              const syncResult = await db.query(
-                `
-                  INSERT INTO biometric_sync_queue(
-                    member_id,
-                    action
-                  )
-                  VALUES($1, 'create')
-                  RETURNING action, status, last_error, processed_at
-                `,
-                [member.id]
-              );
-
-              Object.assign(member, {
-                biometric_sync_action:
-                  syncResult.rows[0].action,
-                biometric_sync_status:
-                  syncResult.rows[0].status,
-                biometric_sync_error:
-                  syncResult.rows[0].last_error,
-                biometric_sync_processed_at:
-                  syncResult.rows[0].processed_at,
-              });
-            } else {
-              await queueBiometricAccessChange(
-                db,
-                member.id,
-                "enable"
-              );
-            }
-
+            enrollmentOperation = "TRANSACTION COMMIT";
             return {
               member,
               biometricUser: biometricResult.rows[0],
@@ -1108,6 +964,7 @@ router.post(
     } catch (error) {
       if (error.code) {
         console.error("Member enrollment database error:", {
+          operation: enrollmentOperation,
           message: error.message,
           code: error.code,
           details: error.details ?? error.detail ?? null,

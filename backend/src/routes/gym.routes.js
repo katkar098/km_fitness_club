@@ -175,8 +175,9 @@ router.get(
   async (req, res, next) => {
     try {
       const { rows } = await query(`
-        SELECT *
+        SELECT id, name, duration_days, price, description, is_active
         FROM membership_plans
+        WHERE is_active IS TRUE
         ORDER BY price, name
       `);
 
@@ -1105,6 +1106,19 @@ router.post(
         data,
       });
     } catch (error) {
+      if (error.code) {
+        console.error("Member enrollment database error:", {
+          message: error.message,
+          code: error.code,
+          details: error.details ?? error.detail ?? null,
+          hint: error.hint ?? null,
+          schema: error.schema ?? null,
+          table: error.table ?? null,
+          column: error.column ?? null,
+          constraint: error.constraint ?? null,
+        });
+      }
+
       if (error.code === "23505") {
         return res.status(409).json({
           success: false,
@@ -1115,7 +1129,6 @@ router.post(
       }
 
       if (error.code) {
-        console.error("Member enrollment database error:", error);
         return res.status(500).json({
           success: false,
           message: "Unable to create the member due to a database error. Please try again.",

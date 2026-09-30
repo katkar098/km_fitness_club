@@ -46,6 +46,7 @@ function CreateUser() {
   const [plans, setPlans] = useState([]);
   const [plansLoading, setPlansLoading] =
     useState(true);
+  const [plansError, setPlansError] = useState("");
 
   const [saving, setSaving] =
     useState(false);
@@ -103,64 +104,61 @@ function CreateUser() {
   // LOAD MEMBERSHIP PLANS
   // ============================================================
 
-  useEffect(() => {
-    let mounted = true;
+  const loadMembershipPlans = useCallback(async () => {
+    setPlansError("");
+    setPlansLoading(true);
 
-    const loadPlans = async () => {
-      try {
-        setPlansLoading(true);
+    try {
+      const response = await api.get("/plans");
+      const payload = response?.data;
+      const rows = Array.isArray(payload?.data)
+        ? payload.data
+        : Array.isArray(payload?.plans)
+          ? payload.plans
+          : Array.isArray(payload)
+            ? payload
+            : null;
 
-        const response =
-          await api.get("/plans");
-
-        const data =
-          response?.data || {};
-
-        const activePlans =
-          Array.isArray(data?.data)
-            ? data.data.filter(
-                (plan) =>
-                  plan.is_active !== false
-              )
-            : [];
-
-        if (!mounted) return;
-
-        setPlans(activePlans);
-
-        setForm((previous) => ({
-          ...previous,
-
-          planId:
-            previous.planId ||
-            activePlans[0]?.id ||
-            "",
-        }));
-      } catch (error) {
-        console.error(
-          "Failed to load membership plans:",
-          error
-        );
-
-        if (mounted) {
-          alert(
-            error.response?.data?.message ||
-              "Could not load membership plans."
-          );
-        }
-      } finally {
-        if (mounted) {
-          setPlansLoading(false);
-        }
+      if (!rows) {
+        throw new Error("The membership plans response was not a list.");
       }
-    };
 
-    loadPlans();
+      // The API normally returns active rows only. Keep this check in the
+      // client too so an inactive plan is never selectable if another API
+      // implementation returns the full table.
+      const activePlans = rows.filter(
+        (plan) => plan?.is_active === true || plan?.isActive === true
+      );
 
-    return () => {
-      mounted = false;
-    };
+      setPlans(activePlans);
+      setForm((previous) => ({
+        ...previous,
+        planId: activePlans.some((plan) => String(plan.id) === String(previous.planId))
+          ? previous.planId
+          : activePlans[0]?.id || "",
+      }));
+    } catch (error) {
+      console.error("Failed to load membership plans:", error);
+      setPlans([]);
+      setPlansError(
+        error.response?.status === 401
+          ? "Your session has expired. Sign in again to load membership plans."
+          : error.response?.status === 403
+            ? "Administrator access is required to load membership plans."
+            : error.response
+              ? `Unable to load membership plans. ${error.response.data?.message || "The server could not read the plan records."}`
+              : error.message?.includes("response was not a list")
+                ? "Unable to load membership plans because the server returned an unexpected response."
+                : "Unable to reach the server to load membership plans. Check your connection and try again."
+      );
+    } finally {
+      setPlansLoading(false);
+    }
   }, []);
+
+  useEffect(() => {
+    loadMembershipPlans();
+  }, [loadMembershipPlans]);
 
   useEffect(() => {
     let mounted = true;
@@ -216,6 +214,13 @@ function CreateUser() {
     }));
   };
 
+  const handleDiscountChange = (event) => {
+    const value = event.target.value;
+    if (value === "" || /^\d*(?:\.\d{0,2})?$/.test(value)) {
+      setForm((previous) => ({ ...previous, discount: value }));
+    }
+  };
+
   // ============================================================
   // SELECTED PLAN
   // ============================================================
@@ -225,23 +230,6 @@ function CreateUser() {
       String(plan.id) ===
       String(form.planId)
   );
-
-  const availablePlanNames = [
-    ...new Set(
-      plans
-        .map((plan) => plan.name)
-        .filter(Boolean)
-    ),
-  ];
-
-  const selectedPlanName =
-    selectedPlan?.name || "";
-
-  const plansForSelectedName =
-    plans.filter(
-      (plan) =>
-        plan.name === selectedPlanName
-    );
 
   // ============================================================
   // AMOUNTS
@@ -255,7 +243,9 @@ function CreateUser() {
     form.admissionFee ? 100 : 0;
 
   const discount =
-    Number(form.discount) || 0;
+    Number.isFinite(Number(form.discount)) && Number(form.discount) >= 0
+      ? Number(form.discount)
+      : 0;
 
   const finalAmount = Math.max(
     0,
@@ -274,44 +264,32 @@ function CreateUser() {
     const days =
       Number(durationDays);
 
-    if (!Number.isFinite(days)) {
+    if (!Number.isFinite(days) || days <= 0) {
       return "Membership";
     }
 
-    if (days >= 330) {
-      return "1 Year";
+    if (days % 365 === 0) {
+      const years = days / 365;
+      return `${years} ${years === 1 ? "Year" : "Years"}`;
     }
 
-    if (days >= 160) {
-      return "6 Months";
+    if (days % 30 === 0) {
+      const months = days / 30;
+      return `${months} ${months === 1 ? "Month" : "Months"}`;
     }
 
-    if (days >= 80) {
-      return "3 Months";
-    }
-
-    return "1 Month";
+    return `${days} ${days === 1 ? "Day" : "Days"}`;
   };
 
   // ============================================================
   // PLAN NAME CHANGE
   // ============================================================
 
-  const handlePlanNameChange = (
-    event
-  ) => {
-    const planName =
-      event.target.value;
-
-    const nextPlan = plans.find(
-      (plan) =>
-        plan.name === planName
-    );
-
+  const handlePlanChange = (event) => {
+    const planId = event.target.value;
     setForm((previous) => ({
       ...previous,
-      planId:
-        nextPlan?.id || "",
+      planId,
     }));
   };
 
@@ -366,6 +344,21 @@ function CreateUser() {
         "Please select a membership plan."
       );
 
+      return;
+    }
+
+    if (!selectedPlan || plansError) {
+      alert(plansError || "Please select an active membership plan.");
+      return;
+    }
+
+    if (!Number.isFinite(discount) || discount < 0) {
+      alert("Discount must be a non-negative amount.");
+      return;
+    }
+
+    if (discount > baseAmount) {
+      alert("Discount cannot be greater than the membership amount.");
       return;
     }
 
@@ -568,7 +561,9 @@ function CreateUser() {
               finalAmount,
 
             paymentMethod:
-              form.paymentMode.toLowerCase(),
+              form.paymentMode === "Bank"
+                ? "bank_transfer"
+                : form.paymentMode.toLowerCase(),
           }
         );
 
@@ -1176,40 +1171,42 @@ function CreateUser() {
 
               <select
                 className="form-select"
-                value={selectedPlanName}
-                onChange={
-                  handlePlanNameChange
-                }
+                value={form.planId}
+                onChange={handlePlanChange}
                 disabled={
                   plansLoading ||
+                  Boolean(plansError) ||
                   plans.length === 0
                 }
               >
-
-                {plans.length === 0 ? (
-
-                  <option value="">
-                    No active plans available
+                <option value="">
+                  {plansLoading
+                    ? "Loading membership plans..."
+                    : plansError
+                      ? "Plans could not be loaded"
+                      : plans.length === 0
+                        ? "No active plans configured"
+                        : "Select a membership plan"}
+                </option>
+                {plans.map((plan) => (
+                  <option key={plan.id} value={plan.id}>
+                    {plan.name} - {getDurationLabel(plan.duration_days)} - ₹{Number(plan.price).toLocaleString("en-IN")}
                   </option>
-
-                ) : (
-
-                  availablePlanNames.map(
-                    (planName) => (
-
-                      <option
-                        key={planName}
-                        value={planName}
-                      >
-                        {planName}
-                      </option>
-
-                    )
-                  )
-
-                )}
-
+                ))}
               </select>
+
+              {plansError ? (
+                <div className="text-danger small mt-2" role="alert">
+                  {plansError}{" "}
+                  <button type="button" className="btn btn-link btn-sm p-0" onClick={loadMembershipPlans}>
+                    Try again
+                  </button>
+                </div>
+              ) : !plansLoading && plans.length === 0 ? (
+                <small className="text-muted d-block mt-2">
+                  No active membership plans are configured. Activate a plan in the membership plan records before creating a member.
+                </small>
+              ) : null}
 
             </div>
 
@@ -1223,34 +1220,13 @@ function CreateUser() {
                 Duration
               </label>
 
-              <select
-                name="planId"
-                className="form-select"
-                value={form.planId}
-                onChange={handleChange}
-                disabled={
-                  plansLoading ||
-                  plansForSelectedName.length ===
-                    0
-                }
-              >
-
-                {plansForSelectedName.map(
-                  (plan) => (
-
-                    <option
-                      key={plan.id}
-                      value={plan.id}
-                    >
-                      {getDurationLabel(
-                        plan.duration_days
-                      )}
-                    </option>
-
-                  )
-                )}
-
-              </select>
+              <input
+                className="form-control"
+                value={selectedPlan ? getDurationLabel(selectedPlan.duration_days) : ""}
+                placeholder={plansLoading ? "Loading..." : "Select a plan first"}
+                readOnly
+                disabled={!selectedPlan}
+              />
 
               <small className="text-muted">
                 Duration is informational only, for pricing.
@@ -1289,26 +1265,16 @@ function CreateUser() {
               </label>
 
               <input
-                type="text"
-                inputMode="numeric"
+                type="number"
+                inputMode="decimal"
+                min="0"
+                max={baseAmount || undefined}
+                step="0.01"
                 name="discount"
                 className="form-control"
                 placeholder="Discount"
                 value={form.discount}
-                onChange={(event) => {
-
-                  const value =
-                    event.target.value.replace(
-                      /\D/g,
-                      ""
-                    );
-
-                  setForm((previous) => ({
-                    ...previous,
-                    discount: value,
-                  }));
-
-                }}
+                onChange={handleDiscountChange}
               />
 
             </div>
@@ -1417,6 +1383,8 @@ function CreateUser() {
           disabled={
             saving ||
             plansLoading ||
+            Boolean(plansError) ||
+            !selectedPlan ||
             biometricUsersLoading ||
             !form.id.trim() ||
             !form.planId ||

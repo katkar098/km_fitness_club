@@ -662,6 +662,11 @@ export function MemberProvider({ children }) {
         status: updatedMember.status || "active",
         biometricEnabled: updatedMember.biometricEnabled !== false,
       };
+      if (updatedMember.updateMembershipDates === true) {
+        payload.updateMembershipDates = true;
+        payload.startDate = updatedMember.startDate || "";
+        payload.expiryDate = updatedMember.expiryDate || "";
+      }
 
       const { data } = await api.put(`/members/${memberId}`, payload);
       if (!data?.data) {

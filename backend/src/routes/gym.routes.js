@@ -1017,12 +1017,25 @@ router.put(
       const allowedFields = new Set([
         "fullName", "full_name", "phone", "gender", "address",
         "status", "biometricEnabled", "biometric_enabled",
+        "updateMembershipDates", "startDate", "expiryDate",
       ]);
       const unknownFields = Object.keys(body).filter(
         (key) => !allowedFields.has(key)
       );
       if (unknownFields.length) {
         throw fail(422, `Unsupported member field: ${unknownFields[0]}`);
+      }
+      if (body.updateMembershipDates !== undefined && typeof body.updateMembershipDates !== "boolean") {
+        throw fail(422, "updateMembershipDates must be a boolean");
+      }
+      const dateFieldsSupplied =
+        Object.prototype.hasOwnProperty.call(body, "startDate") ||
+        Object.prototype.hasOwnProperty.call(body, "expiryDate");
+      if (dateFieldsSupplied && body.updateMembershipDates !== true) {
+        throw fail(422, "Set updateMembershipDates to true to edit membership dates");
+      }
+      if (body.updateMembershipDates === true) {
+        validateMembershipDates(body.startDate, body.expiryDate);
       }
 
       const fieldValues = [
@@ -1038,7 +1051,7 @@ router.put(
         Object.prototype.hasOwnProperty.call(body, snake)
       );
 
-      if (!suppliedFields.length) {
+      if (!suppliedFields.length && body.updateMembershipDates !== true) {
         throw fail(422, "At least one editable member field is required");
       }
 
@@ -1083,6 +1096,39 @@ router.put(
           values
         );
         if (!memberResult.rows[0]) throw fail(404, "Member not found");
+
+        if (body.updateMembershipDates === true) {
+          const membershipResult = await client.query(
+            `
+              SELECT id
+              FROM memberships
+              WHERE member_id = $1
+              ORDER BY updated_at DESC, created_at DESC, start_date DESC
+              LIMIT 1
+              FOR UPDATE
+            `,
+            [req.params.id]
+          );
+          if (!membershipResult.rows[0]) {
+            throw fail(404, "Membership record not found for this member");
+          }
+          await client.query(
+            `
+              UPDATE memberships
+              SET
+                start_date = $2::date,
+                end_date = $3::date,
+                status = CASE
+                  WHEN status = 'cancelled' THEN status
+                  WHEN $3::date < CURRENT_DATE THEN 'expired'
+                  ELSE 'active'
+                END,
+                updated_at = NOW()
+              WHERE id = $1
+            `,
+            [membershipResult.rows[0].id, body.startDate, body.expiryDate]
+          );
+        }
 
         const responseResult = await client.query(
           `

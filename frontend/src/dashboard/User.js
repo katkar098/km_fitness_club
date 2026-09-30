@@ -514,6 +514,8 @@ function User() {
     name: "",
     mobile: "",
     gender: "",
+    startDate: "",
+    expiryDate: "",
     address: "",
     status: "active",
     biometricEnabled: true,
@@ -534,6 +536,9 @@ function User() {
       gender:
         user.gender || "",
 
+      startDate: user.startDate || "",
+      expiryDate: user.expiryDate || "",
+
       address:
         user.address || "",
       status: user.status || "active",
@@ -550,6 +555,7 @@ function User() {
       const updatedMember = {
         ...user,
         ...editData,
+        updateMembershipDates: true,
       };
 
       await updateMember(
@@ -1287,6 +1293,46 @@ function User() {
                             ...editData,
                             name:
                               e.target.value,
+                          })
+                        }
+                      />
+
+                    </div>
+
+                    <div className="col-md-6">
+
+                      <label>
+                        Membership Start Date
+                      </label>
+
+                      <input
+                        type="date"
+                        className="form-control"
+                        value={editData.startDate}
+                        onChange={(e) =>
+                          setEditData({
+                            ...editData,
+                            startDate: e.target.value,
+                          })
+                        }
+                      />
+
+                    </div>
+
+                    <div className="col-md-6">
+
+                      <label>
+                        Membership End Date
+                      </label>
+
+                      <input
+                        type="date"
+                        className="form-control"
+                        value={editData.expiryDate}
+                        onChange={(e) =>
+                          setEditData({
+                            ...editData,
+                            expiryDate: e.target.value,
                           })
                         }
                       />

@@ -256,7 +256,6 @@ function User() {
     return (
       payment?.date ||
       payment?.paymentDate ||
-      payment?.payment_date ||
       payment?.paidAt ||
       payment?.paid_at ||
       payment?.createdAt ||
@@ -515,16 +514,9 @@ function User() {
     name: "",
     mobile: "",
     gender: "",
-    dob: "",
     address: "",
-    plan: "",
-    duration: "",
-    startDate: "",
-    expiryDate: "",
-    paymentMode: "",
-    finalAmount: "",
-    email: "",
-    emergency: "",
+    status: "active",
+    biometricEnabled: true,
   });
 
   useEffect(() => {
@@ -542,40 +534,10 @@ function User() {
       gender:
         user.gender || "",
 
-      dob:
-        user.dob || "",
-
       address:
         user.address || "",
-
-      plan:
-        user.plan || "",
-
-      duration:
-        user.duration || "",
-
-      startDate:
-        user.startDate ||
-        user.joinDate ||
-        "",
-
-      expiryDate:
-        user.expiryDate ||
-        "",
-
-      paymentMode:
-        user.paymentMode ||
-        "",
-
-      finalAmount:
-        user.finalAmount ||
-        "",
-
-      email:
-        user.email || "",
-
-      emergency:
-        user.emergency || "",
+      status: user.status || "active",
+      biometricEnabled: user.biometricEnabled !== false,
     });
   }, [user]);
 
@@ -587,35 +549,7 @@ function User() {
     try {
       const updatedMember = {
         ...user,
-
         ...editData,
-
-        startDate:
-          editData.startDate ||
-          user.startDate ||
-          user.joinDate ||
-          "",
-
-        joinDate:
-          editData.startDate ||
-          user.startDate ||
-          user.joinDate ||
-          "",
-
-        // MANUALLY SELECTED EXPIRY DATE
-        // WILL NOT BE RECALCULATED
-        expiryDate:
-          editData.expiryDate ||
-          user.expiryDate ||
-          "",
-
-        finalAmount: Number(
-          editData.finalAmount ||
-            user.finalAmount ||
-            0
-        ),
-
-        updateMembership: true,
       };
 
       await updateMember(
@@ -1424,220 +1358,46 @@ function User() {
                     <div className="col-md-6">
 
                       <label>
-                        Date of Birth
-                      </label>
-
-                      <input
-                        type="date"
-                        className="form-control"
-                        value={
-                          editData.dob
-                        }
-                        onChange={(e) =>
-                          setEditData({
-                            ...editData,
-                            dob:
-                              e.target.value,
-                          })
-                        }
-                      />
-
-                    </div>
-
-                    <div className="col-md-6">
-
-                      <label>
-                        Plan
-                      </label>
-
-                      <input
-                        className="form-control"
-                        value={
-                          editData.plan
-                        }
-                        onChange={(e) =>
-                          setEditData({
-                            ...editData,
-                            plan:
-                              e.target.value,
-                          })
-                        }
-                      />
-
-                    </div>
-
-                    <div className="col-md-6">
-
-                      <label>
-                        Duration
-                      </label>
-
-                      <input
-                        className="form-control"
-                        value={
-                          editData.duration
-                        }
-                        onChange={(e) =>
-                          setEditData({
-                            ...editData,
-                            duration:
-                              e.target.value,
-                          })
-                        }
-                      />
-
-                    </div>
-
-                    <div className="col-md-6">
-
-                      <label>
-                        Membership Start Date
-                      </label>
-
-                      <input
-                        type="date"
-                        className="form-control"
-                        value={
-                          editData.startDate
-                        }
-                        onChange={(e) =>
-                          setEditData({
-                            ...editData,
-                            startDate:
-                              e.target.value,
-                          })
-                        }
-                      />
-
-                    </div>
-
-                    <div className="col-md-6">
-
-                      <label>
-                        Membership Expiry Date
-                      </label>
-
-                      <input
-                        type="date"
-                        className="form-control"
-                        value={
-                          editData.expiryDate
-                        }
-                        onChange={(e) =>
-                          setEditData({
-                            ...editData,
-                            expiryDate:
-                              e.target.value,
-                          })
-                        }
-                      />
-
-                    </div>
-
-                    <div className="col-md-6">
-
-                      <label>
-                        Payment Mode
+                        Status
                       </label>
 
                       <select
                         className="form-select"
-                        value={
-                          editData.paymentMode
-                        }
+                        value={editData.status}
                         onChange={(e) =>
                           setEditData({
                             ...editData,
-                            paymentMode:
-                              e.target.value,
+                            status: e.target.value,
                           })
                         }
                       >
-
-                        <option value="Cash">
-                          Cash
-                        </option>
-
-                        <option value="UPI">
-                          UPI
-                        </option>
-
-                        <option value="Card">
-                          Card
-                        </option>
-
-                        <option value="Bank Transfer">
-                          Bank Transfer
-                        </option>
-
+                        <option value="active">Active</option>
+                        <option value="inactive">Inactive</option>
+                        <option value="suspended">Suspended</option>
+                        <option value="expired">Expired</option>
                       </select>
 
                     </div>
 
-                    <div className="col-md-6">
+                    <div className="col-md-6 d-flex align-items-end">
 
-                      <label>
-                        Amount Paid
-                      </label>
-
-                      <input
-                        type="number"
-                        className="form-control"
-                        value={
-                          editData.finalAmount
-                        }
-                        onChange={(e) =>
-                          setEditData({
-                            ...editData,
-                            finalAmount:
-                              e.target.value,
-                          })
-                        }
-                      />
-
-                    </div>
-
-                    <div className="col-md-6">
-
-                      <label>
-                        Email
-                      </label>
-
-                      <input
-                        className="form-control"
-                        value={
-                          editData.email
-                        }
-                        onChange={(e) =>
-                          setEditData({
-                            ...editData,
-                            email:
-                              e.target.value,
-                          })
-                        }
-                      />
-
-                    </div>
-
-                    <div className="col-md-6">
-
-                      <label>
-                        Emergency Contact
-                      </label>
-
-                      <input
-                        className="form-control"
-                        value={
-                          editData.emergency
-                        }
-                        onChange={(e) =>
-                          setEditData({
-                            ...editData,
-                            emergency:
-                              e.target.value,
-                          })
-                        }
-                      />
+                      <div className="form-check mb-2">
+                        <input
+                          id="member-biometric-enabled"
+                          type="checkbox"
+                          className="form-check-input"
+                          checked={editData.biometricEnabled}
+                          onChange={(e) =>
+                            setEditData({
+                              ...editData,
+                              biometricEnabled: e.target.checked,
+                            })
+                          }
+                        />
+                        <label className="form-check-label" htmlFor="member-biometric-enabled">
+                          Biometric enabled
+                        </label>
+                      </div>
 
                     </div>
 

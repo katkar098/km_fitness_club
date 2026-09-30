@@ -40,15 +40,6 @@ const createMemberValidation = [
       "Full name is required"
     ),
 
-  body("email")
-    .optional({
-      checkFalsy: true,
-    })
-    .isEmail()
-    .withMessage(
-      "Valid email is required"
-    ),
-
   body("phone")
     .optional({
       checkFalsy: true,
@@ -56,15 +47,6 @@ const createMemberValidation = [
     .isMobilePhone()
     .withMessage(
       "Valid phone number is required"
-    ),
-
-  body("dateOfBirth")
-    .optional({
-      checkFalsy: true,
-    })
-    .isDate()
-    .withMessage(
-      "Valid date of birth is required"
     ),
 
   body("gender")
@@ -87,24 +69,6 @@ const createMemberValidation = [
     .isString()
     .withMessage(
       "Valid address is required"
-    ),
-
-  body("emergencyContactName")
-    .optional({
-      checkFalsy: true,
-    })
-    .isString()
-    .withMessage(
-      "Valid emergency contact name is required"
-    ),
-
-  body("emergencyContactPhone")
-    .optional({
-      checkFalsy: true,
-    })
-    .isMobilePhone()
-    .withMessage(
-      "Valid emergency phone is required"
     ),
 
   // ==========================================================
@@ -260,15 +224,6 @@ const updateMemberValidation = [
       "Full name cannot be empty"
     ),
 
-  body("email")
-    .optional({
-      checkFalsy: true,
-    })
-    .isEmail()
-    .withMessage(
-      "Valid email is required"
-    ),
-
   body("phone")
     .optional({
       checkFalsy: true,
@@ -276,15 +231,6 @@ const updateMemberValidation = [
     .isMobilePhone()
     .withMessage(
       "Valid phone number is required"
-    ),
-
-  body("dateOfBirth")
-    .optional({
-      checkFalsy: true,
-    })
-    .isDate()
-    .withMessage(
-      "Valid date of birth is required"
     ),
 
   body("gender")

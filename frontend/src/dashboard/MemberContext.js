@@ -136,13 +136,8 @@ const normalizeMember = (row) => {
     fullName: row.full_name || row.name || "Unknown",
     mobile: row.phone || row.mobile || "",
     phone: row.phone || row.mobile || "",
-    email: row.email || "",
     gender: row.gender || "",
-    dob: row.date_of_birth || row.dob || "",
-    dateOfBirth: row.date_of_birth || row.dob || "",
     address: row.address || "",
-    emergency: row.emergency_contact_name || row.emergency || "",
-    emergencyPhone: row.emergency_contact_phone || row.emergencyPhone || "",
 
     plan: row.plan_name || row.plan || "Gym Membership",
     duration,
@@ -188,7 +183,7 @@ const normalizeMember = (row) => {
     discount: Number(row.discount ?? 0),
     paymentMode: row.payment_method || row.paymentMode || "Cash",
 
-    status: membershipStatus || row.status || "Active",
+    status: String(row.status || "active").toLowerCase(),
     membershipStatus,
     biometricSyncAction: row.biometric_sync_action || "",
     biometricSyncStatus: row.biometric_sync_status || "",
@@ -658,60 +653,22 @@ export function MemberProvider({ children }) {
       );
     }
 
-    const wantsMembershipUpdate = Boolean(updatedMember.updateMembership);
-
     try {
       const payload = {
-        fullName: updatedMember.name || updatedMember.fullName || "",
-        phone: updatedMember.mobile || updatedMember.phone || "",
-        email: updatedMember.email || "",
-        gender: updatedMember.gender || "",
-        dateOfBirth: updatedMember.dob || updatedMember.dateOfBirth || "",
-        address: updatedMember.address || "",
-        emergencyContactName: updatedMember.emergency || "",
-        emergencyContactPhone: updatedMember.emergencyPhone || "",
-        biometricUserId: updatedMember.biometricUserId || "",
-        employeeCode:
-          updatedMember.employeeCode || updatedMember.memberCode || "",
-        memberCode:
-          updatedMember.memberCode || updatedMember.employeeCode || "",
+        fullName: updatedMember.name ?? updatedMember.fullName ?? "",
+        phone: updatedMember.mobile ?? updatedMember.phone ?? "",
+        gender: updatedMember.gender ?? "",
+        address: updatedMember.address ?? "",
         status: updatedMember.status || "active",
-        paymentMethod: updatedMember.paymentMode || "Cash",
-        updateMembership: wantsMembershipUpdate,
+        biometricEnabled: updatedMember.biometricEnabled !== false,
       };
 
-      if (wantsMembershipUpdate) {
-        payload.plan = updatedMember.plan || "";
-        payload.duration = updatedMember.duration || "";
-        payload.startDate =
-          updatedMember.startDate || updatedMember.joinDate || "";
-        payload.expiryDate =
-          updatedMember.expiryDate || updatedMember.endDate || "";
-        payload.finalAmount = updatedMember.finalAmount ?? 0;
-      }
-
       const { data } = await api.put(`/members/${memberId}`, payload);
-
-      const savedMember = data?.data || updatedMember;
-      const normalizedSaved = normalizeMember(savedMember);
-
-      if (wantsMembershipUpdate) {
-        const requestedStart = normalizeMember({
-          startDate: payload.startDate,
-        }).startDate;
-        const requestedExpiry = normalizeMember({
-          expiryDate: payload.expiryDate,
-        }).expiryDate;
-
-        if (
-          normalizedSaved.startDate !== requestedStart ||
-          normalizedSaved.expiryDate !== requestedExpiry
-        ) {
-          throw new Error(
-            `Membership date save was not confirmed. Requested ${requestedStart} to ${requestedExpiry}; server returned ${normalizedSaved.startDate || "no start date"} to ${normalizedSaved.expiryDate || "no expiry date"}.`
-          );
-        }
+      if (!data?.data) {
+        throw new Error("The server did not return the saved member.");
       }
+      const savedMember = data.data;
+      const normalizedSaved = normalizeMember(savedMember);
 
       setMembers((prev) =>
         prev.map((member) => {
@@ -730,9 +687,7 @@ export function MemberProvider({ children }) {
             employeeCode: normalizedSaved.employeeCode,
             name: normalizedSaved.name,
             mobile: normalizedSaved.mobile,
-            email: normalizedSaved.email,
             gender: normalizedSaved.gender,
-            dob: normalizedSaved.dob,
             address: normalizedSaved.address,
             plan: normalizedSaved.plan,
             duration: normalizedSaved.duration,
@@ -743,10 +698,8 @@ export function MemberProvider({ children }) {
             endDate: normalizedSaved.expiryDate,
             membershipStartDate: normalizedSaved.startDate,
             membershipExpiryDate: normalizedSaved.expiryDate,
-            paymentMode: normalizedSaved.paymentMode,
-            finalAmount: normalizedSaved.finalAmount,
-            emergency: normalizedSaved.emergency,
             status: normalizedSaved.status,
+            biometricEnabled: normalizedSaved.biometricEnabled,
             biometricUserId: normalizedSaved.biometricUserId,
             raw: normalizedSaved.raw,
           };

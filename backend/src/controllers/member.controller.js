@@ -271,12 +271,14 @@ async function enrollMember(req, res) {
 
     const existingMember = await client.query(
       `
-      SELECT id, full_name, member_code, employee_code, biometric_user_id
-      FROM members
-      WHERE
-        regexp_replace(btrim(member_code), '^0+(\\d)', '\\1') = $1
-        OR regexp_replace(btrim(employee_code), '^0+(\\d)', '\\1') = $1
-        OR regexp_replace(btrim(biometric_user_id), '^0+(\\d)', '\\1') = $1
+      SELECT m.id, m.full_name, m.member_code
+      FROM members m
+      WHERE regexp_replace(btrim(m.member_code), '^0+(\\d)', '\\1') = $1
+        OR EXISTS (
+          SELECT 1 FROM biometric_users bu
+          WHERE bu.member_id = m.id
+            AND regexp_replace(btrim(bu.biometric_id::text), '^0+(\\d)', '\\1') = $1
+        )
       LIMIT 1
       `,
       [finalMemberCode]
@@ -301,48 +303,29 @@ async function enrollMember(req, res) {
         `
         INSERT INTO members (
           member_code,
-          biometric_user_id,
-          employee_code,
-
           full_name,
           phone,
-          email,
           gender,
-          date_of_birth,
           address,
-
-          emergency_contact_name,
-          emergency_contact_phone,
-
           status,
           biometric_enabled,
-
           created_at,
           updated_at
         )
         VALUES (
-          $1, $2, $3,
-          $4, $5, $6, $7, $8, $9,
-          $10, $11,
+          $1, $2, $3, $4, $5,
           'active', true,
           NOW(), NOW()
         )
-        RETURNING *;
+        RETURNING id, member_code, full_name, phone, gender, address,
+                  status, biometric_enabled, created_at, updated_at;
         `,
         [
           finalMemberCode,
-          String(body.biometricUserId || finalMemberCode),
-          finalMemberCode,
-
           body.fullName,
           body.phone || null,
-          body.email || null,
           body.gender || null,
-          body.dateOfBirth || null,
           body.address || null,
-
-          body.emergencyContactName || null,
-          body.emergencyContactPhone || null,
         ]
       );
 
@@ -461,7 +444,7 @@ async function enrollMember(req, res) {
             amount,
             payment_method,
 
-            payment_date,
+            paid_at,
             status,
 
             created_at
@@ -469,7 +452,7 @@ async function enrollMember(req, res) {
           VALUES (
             $1, $2,
             $3, $4,
-            CURRENT_DATE, 'paid',
+            NOW(), 'completed',
             NOW()
           )
           `,
@@ -673,7 +656,7 @@ async function getMemberPayments(req, res) {
       SELECT *
       FROM payments
       WHERE member_id = $1
-      ORDER BY payment_date DESC,
+      ORDER BY paid_at DESC,
                created_at DESC
       `,
       [req.params.id]

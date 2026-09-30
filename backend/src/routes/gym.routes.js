@@ -395,7 +395,16 @@ router.get(
       const { rows } = await query(
         `
           SELECT
-            m.*,
+            m.id,
+            m.member_code,
+            m.full_name,
+            m.phone,
+            m.gender,
+            m.address,
+            m.status,
+            m.biometric_enabled,
+            m.created_at,
+            m.updated_at,
 
             ms.id AS membership_id,
             to_char(ms.start_date, 'YYYY-MM-DD') AS start_date,
@@ -503,7 +512,16 @@ router.get(
       const { rows } = await query(
         `
           SELECT
-            m.*,
+            m.id,
+            m.member_code,
+            m.full_name,
+            m.phone,
+            m.gender,
+            m.address,
+            m.status,
+            m.biometric_enabled,
+            m.created_at,
+            m.updated_at,
 
             ms.id AS membership_id,
             to_char(ms.start_date, 'YYYY-MM-DD') AS start_date,
@@ -631,7 +649,6 @@ router.post(
         fullName,
         phone,
         gender,
-        dateOfBirth,
         address,
         biometricUserId,
         planId,
@@ -785,7 +802,6 @@ router.post(
                     full_name,
                     phone,
                     gender,
-                    date_of_birth,
                     address,
                     status,
                     biometric_enabled
@@ -797,7 +813,6 @@ router.post(
                     $3,
                     $4,
                     $5,
-                    $6,
                     'active',
                     TRUE
                   )
@@ -808,7 +823,6 @@ router.post(
                     full_name,
                     phone,
                     gender,
-                    date_of_birth,
                     address,
                     status,
                     biometric_enabled
@@ -818,7 +832,6 @@ router.post(
                   fullName.trim(),
                   phone || null,
                   gender || null,
-                  dateOfBirth || null,
                   address || null,
                 ]
               );
@@ -1000,188 +1013,91 @@ router.put(
   "/members/:id",
   async (req, res, next) => {
     try {
-      const {
-        fullName,
-        phone,
-        email,
-        gender,
-        dateOfBirth,
-        address,
-        emergencyContactName,
-        emergencyContactPhone,
-        biometricUserId,
-        status,
-        updateMembership,
-        plan,
-        duration,
-        startDate,
-        expiryDate,
-        finalAmount,
-        paymentMethod,
-      } = req.body;
+      const body = req.body || {};
+      const allowedFields = new Set([
+        "fullName", "full_name", "phone", "gender", "address",
+        "status", "biometricEnabled", "biometric_enabled",
+      ]);
+      const unknownFields = Object.keys(body).filter(
+        (key) => !allowedFields.has(key)
+      );
+      if (unknownFields.length) {
+        throw fail(422, `Unsupported member field: ${unknownFields[0]}`);
+      }
 
-      const normalizedGender = String(gender || "").trim().toLowerCase();
-      const savedGender = ["male", "female", "other"].includes(normalizedGender)
-        ? normalizedGender
-        : gender;
-      const normalizedStatus = String(status || "").trim().toLowerCase();
-      const savedStatus = ["active", "expired", "suspended", "inactive"].includes(
-        normalizedStatus
-      )
-        ? normalizedStatus
-        : null;
-      const normalizedPaymentMethod = String(paymentMethod || "")
-        .trim()
-        .toLowerCase()
-        .replace(/\s+/g, "_");
+      const fieldValues = [
+        ["fullName", "full_name", body.fullName ?? body.full_name],
+        ["phone", "phone", body.phone],
+        ["gender", "gender", body.gender],
+        ["address", "address", body.address],
+        ["status", "status", body.status],
+        ["biometricEnabled", "biometric_enabled", body.biometricEnabled ?? body.biometric_enabled],
+      ];
+      const suppliedFields = fieldValues.filter(([camel, snake]) =>
+        Object.prototype.hasOwnProperty.call(body, camel) ||
+        Object.prototype.hasOwnProperty.call(body, snake)
+      );
+
+      if (!suppliedFields.length) {
+        throw fail(422, "At least one editable member field is required");
+      }
+
+      const assignments = [];
+      const values = [req.params.id];
+      for (const [camel, snake, rawValue] of suppliedFields) {
+        let value = rawValue;
+        if (camel === "fullName") {
+          value = String(rawValue ?? "").trim();
+          if (!value) throw fail(422, "Full name cannot be empty");
+        } else if (camel === "gender" && rawValue != null && rawValue !== "") {
+          value = String(rawValue).trim().toLowerCase();
+          if (!["male", "female", "other"].includes(value)) {
+            throw fail(422, "Invalid gender");
+          }
+        } else if (camel === "gender" && rawValue === "") {
+          value = null;
+        } else if (camel === "status") {
+          value = String(rawValue ?? "").trim().toLowerCase();
+          if (!["active", "expired", "suspended", "inactive"].includes(value)) {
+            throw fail(422, "Invalid member status");
+          }
+        } else if (camel === "biometricEnabled" && typeof rawValue !== "boolean") {
+          throw fail(422, "biometricEnabled must be a boolean");
+        } else if ((camel === "phone" || camel === "address") && rawValue === "") {
+          value = null;
+        }
+        values.push(value);
+        assignments.push(`${snake} = $${values.length}`);
+      }
+      assignments.push("updated_at = NOW()");
 
       const savedMember = await transaction(async (client) => {
         const memberResult = await client.query(
           `
             UPDATE members
-            SET
-              full_name = COALESCE(NULLIF($2, ''), full_name),
-              phone = COALESCE(NULLIF($3, ''), phone),
-              email = COALESCE(NULLIF($4, ''), email),
-              gender = COALESCE(NULLIF($5, ''), gender),
-              date_of_birth = COALESCE(NULLIF($6, '')::date, date_of_birth),
-              address = COALESCE(NULLIF($7, ''), address),
-              emergency_contact_name = COALESCE(NULLIF($8, ''), emergency_contact_name),
-              emergency_contact_phone = COALESCE(NULLIF($9, ''), emergency_contact_phone),
-              biometric_user_id = COALESCE(NULLIF($10, ''), biometric_user_id),
-              status = COALESCE(NULLIF($11, ''), status),
-              updated_at = NOW()
+            SET ${assignments.join(", ")}
             WHERE id = $1
-            RETURNING *
+            RETURNING id, member_code, full_name, phone, gender, address,
+                      status, biometric_enabled, created_at, updated_at
           `,
-          [
-            req.params.id,
-            fullName,
-            phone,
-            email,
-            savedGender,
-            dateOfBirth,
-            address,
-            emergencyContactName,
-            emergencyContactPhone,
-            biometricUserId,
-            savedStatus,
-          ]
+          values
         );
-
-        if (!memberResult.rows[0]) {
-          throw fail(404, "Member not found");
-        }
-
-        let membership = null;
-
-        if (updateMembership === true) {
-          const currentResult = await client.query(
-            `
-              SELECT *
-              FROM memberships
-              WHERE member_id = $1
-              ORDER BY updated_at DESC, created_at DESC, start_date DESC
-              LIMIT 1
-              FOR UPDATE
-            `,
-            [req.params.id]
-          );
-
-          const current = currentResult.rows[0];
-          if (!current) {
-            throw fail(404, "Membership record not found for this member");
-          }
-
-          let resolvedPlanId = current.plan_id;
-          if (plan) {
-            const planResult = await client.query(
-              `
-                SELECT id
-                FROM membership_plans
-                WHERE LOWER(name) = LOWER($1) AND is_active = TRUE
-                LIMIT 1
-              `,
-              [plan]
-            );
-            if (planResult.rows[0]) resolvedPlanId = planResult.rows[0].id;
-          }
-
-          const targetStartDate = String(startDate || current.start_date).slice(0, 10);
-          const targetExpiryDate = String(expiryDate || current.end_date).slice(0, 10);
-          validateMembershipDates(targetStartDate, targetExpiryDate);
-
-          const membershipResult = await client.query(
-            `
-              UPDATE memberships
-              SET
-                plan_id = $2,
-                start_date = $3::date,
-                end_date = $4::date,
-                status = CASE
-                  WHEN status = 'cancelled' THEN status
-                  WHEN $4::date < CURRENT_DATE THEN 'expired'
-                  ELSE 'active'
-                END,
-                updated_at = NOW()
-              WHERE id = $1
-              RETURNING id, plan_id, start_date, end_date, status, updated_at
-            `,
-            [current.id, resolvedPlanId, targetStartDate, targetExpiryDate]
-          );
-          membership = membershipResult.rows[0];
-        }
-
-        if (
-          updateMembership === true &&
-          (finalAmount !== undefined || paymentMethod)
-        ) {
-          const paymentResult = await client.query(
-            `
-              SELECT id, amount, payment_method
-              FROM payments
-              WHERE member_id = $1
-              ORDER BY paid_at DESC
-              LIMIT 1
-              FOR UPDATE
-            `,
-            [req.params.id]
-          );
-
-          if (paymentResult.rows[0]) {
-            await client.query(
-              `
-                UPDATE payments
-                SET
-                  amount = COALESCE($2, amount),
-                  payment_method = COALESCE(NULLIF($3, ''), payment_method)
-                WHERE id = $1
-              `,
-              [
-                paymentResult.rows[0].id,
-                finalAmount ?? paymentResult.rows[0].amount,
-                normalizedPaymentMethod || paymentResult.rows[0].payment_method,
-              ]
-            );
-          }
-        }
+        if (!memberResult.rows[0]) throw fail(404, "Member not found");
 
         const responseResult = await client.query(
           `
             SELECT
-              m.*,
-              ms.id AS membership_id,
-              ms.plan_id,
-              ms.start_date,
-              ms.end_date,
-              ms.status AS membership_status,
-              p.name AS plan_name,
-              p.duration_days AS plan_duration_days,
-              pay.amount AS final_amount,
-              pay.payment_method
+              m.id, m.member_code, m.full_name, m.phone, m.gender, m.address,
+              m.status, m.biometric_enabled, m.created_at, m.updated_at,
+              ms.id AS membership_id, ms.plan_id, ms.start_date, ms.end_date,
+              ms.status AS membership_status, ms.amount AS membership_amount,
+              p.name AS plan_name, p.duration_days AS plan_duration_days,
+              pay.amount AS final_amount, pay.payment_method,
+              biometric.biometric_id::text AS biometric_user_id,
+              biometric.sync_status AS biometric_sync_status
             FROM members m
             LEFT JOIN LATERAL (
-              SELECT *
+              SELECT id, plan_id, start_date, end_date, status, amount
               FROM memberships
               WHERE member_id = m.id
               ORDER BY updated_at DESC, created_at DESC, start_date DESC
@@ -1195,21 +1111,18 @@ router.put(
               ORDER BY paid_at DESC
               LIMIT 1
             ) pay ON TRUE
+            LEFT JOIN LATERAL (
+              SELECT biometric_id, sync_status
+              FROM biometric_users
+              WHERE member_id = m.id
+              ORDER BY biometric_id
+              LIMIT 1
+            ) biometric ON TRUE
             WHERE m.id = $1
           `,
           [req.params.id]
         );
-
-        const row = responseResult.rows[0];
-        return {
-          ...row,
-          membership_start_date: row.start_date || null,
-          membership_end_date: row.end_date || null,
-          membership_expiry_date: row.end_date || null,
-          expiry_date: row.end_date || null,
-          join_date: row.start_date || null,
-          membership,
-        };
+        return responseResult.rows[0];
       });
 
       res.json({
@@ -1312,7 +1225,8 @@ router.post(
             const memberResult =
               await db.query(
                 `
-                  SELECT *
+                  SELECT id, member_code, full_name, phone, gender, address,
+                         status, biometric_enabled, created_at, updated_at
                   FROM members
 
                   WHERE id = $1
@@ -1424,7 +1338,8 @@ router.post(
                     $6
                   )
 
-                  RETURNING *
+                  RETURNING id, member_id, plan_id, start_date, end_date,
+                            status, amount, created_at, updated_at
                 `,
                 [
                   member.id,
@@ -1482,7 +1397,9 @@ router.post(
                     'completed'
                   )
 
-                  RETURNING *
+                  RETURNING id, member_id, membership_id, amount,
+                            payment_method, status, paid_at, base_amount,
+                            admission_fee, discount, notes, created_at
                 `,
                 [
                   member.id,
@@ -1514,7 +1431,8 @@ router.post(
 
                   WHERE id = $1
 
-                  RETURNING *
+                  RETURNING id, member_code, full_name, phone, gender, address,
+                            status, biometric_enabled, created_at, updated_at
                 `,
                 [member.id]
               );

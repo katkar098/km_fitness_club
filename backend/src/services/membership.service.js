@@ -153,7 +153,7 @@ async function getAllMemberships() {
       mp.name AS plan_name,
       mp.price AS plan_price,
       mem.member_code,
-      mem.employee_code,
+      biometric.biometric_id::text AS employee_code,
       mem.full_name,
       mem.phone
     FROM memberships m
@@ -161,6 +161,10 @@ async function getAllMemberships() {
       ON mem.id = m.member_id
     LEFT JOIN membership_plans mp
       ON mp.id = m.plan_id
+    LEFT JOIN LATERAL (
+      SELECT biometric_id FROM biometric_users
+      WHERE member_id = mem.id ORDER BY biometric_id LIMIT 1
+    ) biometric ON TRUE
     ORDER BY m.start_date DESC
   `);
 
@@ -178,7 +182,7 @@ async function getMembershipById(id) {
       m.*,
       mp.name AS plan_name,
       mem.member_code,
-      mem.employee_code,
+      biometric.biometric_id::text AS employee_code,
       mem.full_name,
       mem.phone
     FROM memberships m
@@ -186,6 +190,10 @@ async function getMembershipById(id) {
       ON mem.id = m.member_id
     LEFT JOIN membership_plans mp
       ON mp.id = m.plan_id
+    LEFT JOIN LATERAL (
+      SELECT biometric_id FROM biometric_users
+      WHERE member_id = mem.id ORDER BY biometric_id LIMIT 1
+    ) biometric ON TRUE
     WHERE m.id = $1
     `,
     [id]
@@ -481,12 +489,16 @@ async function getExpiringMemberships() {
     SELECT
       ms.*,
       m.member_code,
-      m.employee_code,
+      biometric.biometric_id::text AS employee_code,
       m.full_name,
       m.phone
     FROM memberships ms
     JOIN members m
       ON m.id = ms.member_id
+    LEFT JOIN LATERAL (
+      SELECT biometric_id FROM biometric_users
+      WHERE member_id = m.id ORDER BY biometric_id LIMIT 1
+    ) biometric ON TRUE
     WHERE
       ms.status = 'active'
       AND ms.end_date
@@ -507,12 +519,16 @@ async function getExpiredMemberships() {
     SELECT
       ms.*,
       m.member_code,
-      m.employee_code,
+      biometric.biometric_id::text AS employee_code,
       m.full_name,
       m.phone
     FROM memberships ms
     JOIN members m
       ON m.id = ms.member_id
+    LEFT JOIN LATERAL (
+      SELECT biometric_id FROM biometric_users
+      WHERE member_id = m.id ORDER BY biometric_id LIMIT 1
+    ) biometric ON TRUE
     WHERE
       ms.end_date < CURRENT_DATE
     ORDER BY ms.end_date DESC

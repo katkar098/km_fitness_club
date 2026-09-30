@@ -63,8 +63,6 @@ function CreateUser() {
     name: "",
     mobile: "",
     gender: "",
-    dob: "",
-    emergency: "",
     address: "",
     planCategory: "",
     planId: "",
@@ -488,9 +486,6 @@ function CreateUser() {
           fullName:
             form.name.trim(),
 
-          dateOfBirth:
-            form.dob || null,
-
           planId:
             form.planId,
 
@@ -521,15 +516,8 @@ function CreateUser() {
                 ? form.gender.toLowerCase()
                 : null,
 
-            dateOfBirth:
-              form.dob || null,
-
             address:
               form.address.trim() ||
-              null,
-
-            emergencyContactName:
-              form.emergency.trim() ||
               null,
 
             // ==================================================
@@ -706,16 +694,8 @@ function CreateUser() {
           enrolledMember.gender ||
           "",
 
-        dob:
-          enrolledMember.date_of_birth ||
-          "",
-
         address:
           enrolledMember.address ||
-          "",
-
-        emergency:
-          enrolledMember.emergency_contact_name ||
           "",
 
         // ======================================================
@@ -1062,25 +1042,6 @@ function CreateUser() {
             </div>
 
             {/* ================================================= */}
-            {/* BIRTH DATE */}
-            {/* ================================================= */}
-
-            <div className="col-md-4">
-
-              <label className="form-label fw-bold">
-                Birth Date
-              </label>
-
-              <input
-                type="date"
-                name="dob"
-                className="form-control"
-                value={form.dob}
-                onChange={handleChange}
-              />
-
-            </div>
-
             {/* ================================================= */}
             {/* ADDRESS */}
             {/* ================================================= */}
@@ -1102,25 +1063,6 @@ function CreateUser() {
             </div>
 
             {/* ================================================= */}
-            {/* EMERGENCY CONTACT */}
-            {/* ================================================= */}
-
-            <div className="col-md-4">
-
-              <label className="form-label fw-bold">
-                Emergency Contact
-              </label>
-
-              <input
-                name="emergency"
-                className="form-control"
-                placeholder="Emergency contact"
-                value={form.emergency}
-                onChange={handleChange}
-              />
-
-            </div>
-
           </div>
 
         </div>

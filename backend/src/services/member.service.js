@@ -26,7 +26,8 @@ async function getAllMembers() {
     )
 
     SELECT
-      m.*,
+      m.id, m.member_code, m.full_name, m.phone, m.gender, m.address,
+      m.status, m.biometric_enabled, m.created_at, m.updated_at,
 
       lm.id AS membership_id,
 
@@ -116,7 +117,8 @@ async function searchMembers(search) {
     )
 
     SELECT
-      m.*,
+      m.id, m.member_code, m.full_name, m.phone, m.gender, m.address,
+      m.status, m.biometric_enabled, m.created_at, m.updated_at,
 
       lm.id AS membership_id,
 
@@ -145,8 +147,6 @@ async function searchMembers(search) {
       COALESCE(m.full_name, '') ILIKE $1
       OR COALESCE(m.phone, '') ILIKE $1
       OR COALESCE(m.member_code, '') ILIKE $1
-      OR COALESCE(m.employee_code, '') ILIKE $1
-      OR COALESCE(m.biometric_user_id, '') ILIKE $1
 
     ORDER BY
       m.created_at DESC
@@ -210,7 +210,8 @@ async function getMemberById(memberId) {
     )
 
     SELECT
-      m.*,
+      m.id, m.member_code, m.full_name, m.phone, m.gender, m.address,
+      m.status, m.biometric_enabled, m.created_at, m.updated_at,
 
       lm.id AS membership_id,
 
@@ -357,16 +358,10 @@ async function createMember(data) {
     `
     INSERT INTO members (
       member_code,
-      biometric_user_id,
-      employee_code,
       full_name,
       phone,
-      email,
       gender,
-      date_of_birth,
       address,
-      emergency_contact_name,
-      emergency_contact_phone,
       status,
       biometric_enabled,
       created_at,
@@ -378,30 +373,17 @@ async function createMember(data) {
       $3,
       $4,
       $5,
-      $6,
-      $7,
-      $8,
-      $9,
-      $10,
-      $11,
-      COALESCE($12, 'active'),
-      COALESCE($13, false),
+      COALESCE($6, 'active'),
+      COALESCE($7, false),
       NOW(),
       NOW()
     )
-    RETURNING *
+    RETURNING id, member_code, full_name, phone, gender, address,
+              status, biometric_enabled, created_at, updated_at
     `,
     [
       data.memberCode ||
         data.member_code ||
-        null,
-
-      data.biometricUserId ||
-        data.biometric_user_id ||
-        null,
-
-      data.employeeCode ||
-        data.employee_code ||
         null,
 
       data.fullName ||
@@ -410,25 +392,10 @@ async function createMember(data) {
       data.phone ||
         null,
 
-      data.email ||
-        null,
-
       data.gender ||
         null,
 
-      data.dateOfBirth ||
-        data.date_of_birth ||
-        null,
-
       data.address ||
-        null,
-
-      data.emergencyContactName ||
-        data.emergency_contact_name ||
-        null,
-
-      data.emergencyContactPhone ||
-        data.emergency_contact_phone ||
         null,
 
       data.status ||
@@ -448,123 +415,46 @@ async function createMember(data) {
 // ============================================================
 
 async function updateMember(memberId, data) {
-  const updated = await db.transaction(async (client) => {
-    const result = await client.query(
-      `
-      UPDATE members
-      SET
-        full_name = COALESCE($1, full_name),
-        phone = COALESCE($2, phone),
-        email = COALESCE($3, email),
-        gender = COALESCE($4, gender),
-        date_of_birth = COALESCE($5, date_of_birth),
-        address = COALESCE($6, address),
-        emergency_contact_name = COALESCE($7, emergency_contact_name),
-        emergency_contact_phone = COALESCE($8, emergency_contact_phone),
-        updated_at = NOW()
-      WHERE id = $9
-      RETURNING id
-      `,
-      [
-        data.fullName ?? data.full_name ?? null,
-        data.phone ?? null,
-        data.email ?? null,
-        data.gender ?? null,
-        data.dateOfBirth ?? data.date_of_birth ?? null,
-        data.address ?? null,
-        data.emergencyContactName ?? data.emergency_contact_name ?? null,
-        data.emergencyContactPhone ?? data.emergency_contact_phone ?? null,
-        memberId,
-      ]
-    );
+  const allowedFields = [
+    ["fullName", "full_name", data.fullName ?? data.full_name],
+    ["phone", "phone", data.phone],
+    ["gender", "gender", data.gender],
+    ["address", "address", data.address],
+    ["status", "status", data.status],
+    ["biometricEnabled", "biometric_enabled", data.biometricEnabled ?? data.biometric_enabled],
+  ];
+  const supplied = allowedFields.filter(([camel, snake]) =>
+    Object.prototype.hasOwnProperty.call(data, camel) ||
+    Object.prototype.hasOwnProperty.call(data, snake)
+  );
+  if (!supplied.length) throw new Error("At least one editable member field is required.");
 
-    if (!result.rows[0]) {
-      return null;
+  const values = [memberId];
+  const assignments = supplied.map(([camel, column, rawValue]) => {
+    let value = rawValue;
+    if (camel === "fullName") {
+      value = String(rawValue ?? "").trim();
+      if (!value) throw new Error("Full name cannot be empty.");
+    } else if (camel === "gender" && rawValue) {
+      value = String(rawValue).trim().toLowerCase();
+      if (!["male", "female", "other"].includes(value)) throw new Error("Invalid gender.");
+    } else if (camel === "status") {
+      value = String(rawValue ?? "").trim().toLowerCase();
+      if (!["active", "expired", "suspended", "inactive"].includes(value)) throw new Error("Invalid member status.");
+    } else if (camel === "biometricEnabled" && typeof rawValue !== "boolean") {
+      throw new Error("biometricEnabled must be a boolean.");
+    } else if ((camel === "phone" || camel === "address") && rawValue === "") {
+      value = null;
     }
-
-    let membership = null;
-
-    if (data.updateMembership === true) {
-      const startDate = data.startDate ?? data.start_date;
-      const expiryDate = data.expiryDate ?? data.endDate ?? data.end_date;
-
-      const isIsoDate = (value) =>
-        typeof value === "string" &&
-        /^\d{4}-\d{2}-\d{2}$/.test(value) &&
-        !Number.isNaN(Date.parse(`${value}T00:00:00Z`)) &&
-        new Date(`${value}T00:00:00Z`).toISOString().slice(0, 10) === value;
-
-      if (!isIsoDate(startDate) || !isIsoDate(expiryDate)) {
-        throw new Error("Enter valid membership start and expiry dates.");
-      }
-
-      if (expiryDate < startDate) {
-        throw new Error("Membership expiry date cannot be before its start date.");
-      }
-
-      const latestMembership = await client.query(
-        `
-        SELECT id
-        FROM memberships
-        WHERE member_id = $1
-        ORDER BY updated_at DESC, created_at DESC, end_date DESC NULLS LAST
-        LIMIT 1
-        FOR UPDATE
-        `,
-        [memberId]
-      );
-
-      if (!latestMembership.rows[0]) {
-        throw new Error("This member has no membership record to update.");
-      }
-
-      const membershipResult = await client.query(
-        `
-        UPDATE memberships
-        SET
-          start_date = $1,
-          end_date = $2,
-          status = CASE
-            WHEN status = 'cancelled' THEN status
-            WHEN $2::date < CURRENT_DATE THEN 'expired'
-            ELSE 'active'
-          END,
-          updated_at = NOW()
-        WHERE id = $3
-        RETURNING id, start_date, end_date, status, plan_id, updated_at
-        `,
-        [startDate, expiryDate, latestMembership.rows[0].id]
-      );
-
-      membership = membershipResult.rows[0];
-    }
-
-    return { memberId: result.rows[0].id, membership };
+    values.push(value);
+    return `${column} = $${values.length}`;
   });
 
-  if (!updated) {
-    return null;
-  }
-
-  const savedMember = await getMemberById(memberId);
-
-  if (!savedMember || !updated.membership) {
-    return savedMember;
-  }
-
-  return {
-    ...savedMember,
-    membership_id: updated.membership.id,
-    start_date: updated.membership.start_date,
-    end_date: updated.membership.end_date,
-    membership_status: updated.membership.status,
-    plan_id: updated.membership.plan_id,
-    membership_start_date: updated.membership.start_date,
-    membership_end_date: updated.membership.end_date,
-    membership_expiry_date: updated.membership.end_date,
-    expiry_date: updated.membership.end_date,
-    join_date: updated.membership.start_date,
-  };
+  const result = await db.query(
+    `UPDATE members SET ${assignments.join(", ")}, updated_at = NOW() WHERE id = $1 RETURNING id`,
+    values
+  );
+  return result.rows[0] ? getMemberById(memberId) : null;
 }
 
 // ============================================================
@@ -576,7 +466,8 @@ async function deleteMember(memberId) {
     `
     DELETE FROM members
     WHERE id = $1
-    RETURNING *
+    RETURNING id, member_code, full_name, phone, gender, address,
+              status, biometric_enabled, created_at, updated_at
     `,
     [memberId]
   );

@@ -288,29 +288,11 @@ function normalizeDeviceUser(user) {
     mobile:
       String(user.mobile ?? "").trim(),
 
-    email:
-      String(user.email ?? "").trim(),
-
     gender:
       String(user.gender ?? "").trim(),
 
-    date_of_birth:
-      user.date_of_birth ??
-      user.dateOfBirth ??
-      "",
-
     address:
       String(user.address ?? "").trim(),
-
-    emergency_contact_name:
-      String(
-        user.emergency_contact_name ?? ""
-      ).trim(),
-
-    emergency_contact_phone:
-      String(
-        user.emergency_contact_phone ?? ""
-      ).trim(),
 
     card_no:
       String(cardNo ?? "").trim(),

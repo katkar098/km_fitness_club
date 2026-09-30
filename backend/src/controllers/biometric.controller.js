@@ -43,20 +43,9 @@ async function getDeviceUsers(req, res, next) {
     const { rows: members } =
       await query(`
         SELECT
-          id,
-          biometric_user_id,
-          member_code,
-          full_name,
-          phone,
-          email,
-          gender,
-          date_of_birth,
-          address,
-          emergency_contact_name,
-          emergency_contact_phone
-        FROM members
-        WHERE biometric_user_id IS NOT NULL
-          AND btrim(biometric_user_id) <> ''
+          biometric_id::text AS biometric_user_id
+        FROM biometric_users
+        WHERE member_id IS NOT NULL
       `);
 
     const registeredIds =
@@ -294,11 +283,18 @@ async function removeBiometric(
       await query(
         `
         SELECT
-          id,
-          biometric_user_id,
-          full_name
-        FROM members
-        WHERE id = $1
+          m.id,
+          biometric.biometric_id::text AS biometric_user_id,
+          m.full_name
+        FROM members m
+        LEFT JOIN LATERAL (
+          SELECT biometric_id
+          FROM biometric_users
+          WHERE member_id = m.id
+          ORDER BY biometric_id
+          LIMIT 1
+        ) biometric ON TRUE
+        WHERE m.id = $1
         LIMIT 1
         `,
         [
@@ -463,8 +459,7 @@ async function getExpiredMembers() {
         m.id,
         m.full_name,
         m.member_code,
-        m.employee_code,
-        m.biometric_user_id,
+        biometric.biometric_id::text AS biometric_user_id,
         m.status AS member_status,
         m.biometric_enabled,
 
@@ -478,14 +473,16 @@ async function getExpiredMembers() {
       INNER JOIN latest_memberships lm
         ON lm.member_id = m.id
 
+      INNER JOIN LATERAL (
+        SELECT biometric_id
+        FROM biometric_users
+        WHERE member_id = m.id
+        ORDER BY biometric_id
+        LIMIT 1
+      ) biometric ON TRUE
+
       WHERE
-        m.biometric_user_id IS NOT NULL
-
-        AND btrim(
-          m.biometric_user_id
-        ) <> ''
-
-        AND lm.end_date < CURRENT_DATE
+        lm.end_date < CURRENT_DATE
 
       ORDER BY
         lm.end_date ASC,
